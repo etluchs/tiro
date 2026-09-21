@@ -40,6 +40,14 @@ MAY_MOVE = {"file"}
 MOVE_FROM_TRUST = "L4"
 MOVE_TO_TRUST = "L3"
 
+#: Tiro's own state directory. Not vault content: the run ledger, run records,
+#: and the payload a dispatch would post. It is committed by the journal step
+#: under its own trailer, so a job writing there is bookkeeping rather than an
+#: edit to the user's vault — and keeping it out of the containment check is
+#: what lets a job leave an audit trail without declaring a path that has
+#: nothing to do with the note it is working on.
+OURS = ".tiro/"
+
 
 @dataclass(frozen=True)
 class Snapshot:
@@ -64,6 +72,10 @@ class GateResult:
 
 def _broken_set(links: list[BrokenLink]) -> frozenset[tuple[str, str]]:
     return frozenset((b.note, b.target) for b in links)
+
+
+def _is_ours(path: str) -> bool:
+    return as_vault_path(path).startswith(OURS)
 
 
 def snapshot(config: Config, git: Git, ops: VaultOps, note_rel: str) -> Snapshot:
@@ -111,7 +123,9 @@ def check(
                 f"{MOVE_TO_TRUST}"
             )
 
-    changed = [p for p in git.dirty_paths() if p not in before.dirty]
+    changed = [
+        p for p in git.dirty_paths() if p not in before.dirty and not _is_ours(p)
+    ]
     result.changed = changed
 
     # 2. containment, and 6-by-proxy: anything we did not declare is a bug.
@@ -131,7 +145,7 @@ def check(
         if len(line) <= 3:
             continue
         code, path = line[:2], line[3:]
-        if path in before.dirty:
+        if path in before.dirty or _is_ours(path):
             continue
         if "D" in code and path != move_src:
             result.fail(f"deleted {path}; Tiro never deletes a note")
