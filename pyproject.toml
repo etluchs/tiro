@@ -1,0 +1,27 @@
+[project]
+name = "tiro"
+version = "0.1.0"
+description = "An agent living in and with an Obsidian vault"
+requires-python = ">=3.11"
+dependencies = [
+    # Frontmatter validation only. Tiro never round-trips the user's YAML;
+    # see src/tiro/protocol.py for why.
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+agent = ["claude-agent-sdk>=0.1"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+tiro = "tiro.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

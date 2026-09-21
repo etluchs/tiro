@@ -1,0 +1,33 @@
+# Copy to tiro.toml. This file lives in the tiro repo, not the vault.
+
+# The vault is a sibling git repo, not a submodule (DESIGN §6).
+vault = "../vault"
+
+[run]
+max_jobs = 20
+max_seconds = 900
+# Skip notes touched in the last N seconds: the user is probably typing (DESIGN §5.3).
+skip_recent_seconds = 60
+max_attempts_per_note_per_day = 3
+push = true
+
+[agent]
+model = "claude-opus-5"
+max_turns = 30
+
+[jobs.triage]
+effort = "low"
+max_seconds = 120
+
+[jobs.research]
+max_seconds = 600
+max_searches = 8
+# allowed_domains = []
+# blocked_domains = []
+
+[dispatch]
+# Jira Cloud, posted through acli under the user's own account (DESIGN §5.5).
+site = "example.atlassian.net"
+project = "TIRO"          # a single key; payloads naming anything else are rejected
+issue_type = "Task"
+live = false              # preview mode until the payloads look right
