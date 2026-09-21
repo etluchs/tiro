@@ -450,7 +450,19 @@ else in the system.
    creating a second one. That is why the label matters more than it looks.
 5. **Create only.** No transitions, no updates, no closes, no deletes. One
    direction, one verb.
-6. **Dry run until proven.** `dispatch` starts in preview mode: it writes the
+6. **Visible provenance.** Issues are created under the user's own account, so
+   nothing on the board distinguishes them from issues the user filed by hand
+   unless Tiro makes it so. Every dispatched issue therefore carries two labels —
+   `tiro`, for humans and for `labels = tiro` audits, and `tiro-<uuid>`, for the
+   idempotency search — plus a description footer naming the source note and the
+   run id. Inside the vault every Tiro byte is attributable (§6); outside it, the
+   same standard applies.
+7. **One project.** `dispatch.project` in `tiro.toml` is a single project key,
+   and a payload naming anything else is rejected by schema validation before
+   `acli` is invoked. The credential is the user's own and carries their full
+   Jira permissions, which is far more reach than `dispatch` needs; the narrowest
+   thing we can do with it is refuse to point it anywhere but one project.
+8. **Dry run until proven.** `dispatch` starts in preview mode: it writes the
    exact payload it *would* post into the note, and stops. Live posting is a
    config flag the user turns on once the previews look right.
 
@@ -637,6 +649,10 @@ notification, and it arrives wherever the vault syncs.
   (`acli jira auth login --site … --email … --token` with the token piped in),
   plain-text descriptions on create, and it keeps agent-assignee and the hosted
   MCP server available as later options.
+- **Issues are created under the user's own account**, not a bot's. Two
+  consequences, both handled in §5.5: they need visible provenance on the board,
+  since nothing else distinguishes them; and the credential carries the user's
+  full Jira permissions, so `dispatch` is pinned to a single project key.
 
 ### Open
 
@@ -644,12 +660,8 @@ notification, and it arrives wherever the vault syncs.
    real vault's shape. First build step is `tiro adopt` (ITERATION-1 M1), which
    reads the vault and *proposes* `rules.md` and `trust.toml` for the user to
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
-2. **Four setup values, not really design questions:** the site
-   (`<something>.atlassian.net`), the project key, the default issue type, and
-   whether issues are created by a bot account or as you. The last one is the
-   only one with a consequence worth thinking about — issues created as you are
-   indistinguishable from issues you filed yourself, which is either convenient
-   or misleading depending on who else reads the board.
+2. **Three setup values, not design questions:** the site
+   (`<something>.atlassian.net`), the project key, and the default issue type.
 3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
    job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
    right number needs one week of real traffic.

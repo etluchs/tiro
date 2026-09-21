@@ -139,19 +139,22 @@ that makes each step verifiable before the next one can hurt:
    fixture. Descriptions go up as plain text; Jira Cloud does the ADF
    conversion, so Tiro never authors ADF.
 2. The `dispatch` skill drafts a **payload**, not an issue — summary,
-   description, issue type, labels including the note's stable `tiro-<uuid>` — 
-   into a preview block. The model never holds a create-issue tool.
+   description, issue type, and labels `tiro` plus the note's stable
+   `tiro-<uuid>` — into a preview block. The runner appends the provenance
+   footer (source note, run id) and rejects any payload whose project key is not
+   `dispatch.project`. The model never holds a create-issue tool.
 3. The idempotency check: `tiro/jira` set → stop; else JQL on the label → adopt
    if found; else create. Key written back and committed as its own commit,
    immediately.
 4. Preview mode is the default. `dispatch.live = true` in `tiro.toml` is what the
    user turns on, deliberately, after the previews look right.
-- **Done when:** five specs dispatched with five issues created — not six; the
-  crash window is tested by killing the process between create and write-back and
-  confirming the next run adopts rather than duplicates; a note with `tiro/jira`
-  already set is a no-op; a spec that has not been signed off is refused; and
-  `acli` is denied to the agent, asserted by a test that the allowlist rejects
-  `Bash(acli *)`.
+- **Done when:** `labels = tiro` returns exactly five issues for five dispatched
+  specs — not six; the crash window is tested by killing the process between
+  create and write-back and confirming the next run adopts rather than
+  duplicates; a note with `tiro/jira` already set is a no-op; a spec that has not
+  been signed off is refused; a payload naming a project other than
+  `dispatch.project` is rejected before `acli` is invoked; and `acli` is denied
+  to the agent, asserted by a test that the allowlist rejects `Bash(acli *)`.
 
 ### M7 — Unattended for a week (ongoing)
 systemd timer every 15 min. Daily: read the journal, check for stuck notes, tune
@@ -183,8 +186,10 @@ M2 is the part that makes everything else safe.
 6. **Bounded.** No run exceeds its wall-clock or cost ceiling; exceeding one ends
    in `blocked`, never a half-written note.
 7. **No duplicates.** Every dispatched spec corresponds to exactly one Jira
-   issue, verified by a JQL search over the `tiro-*` labels at the end of the
-   week. This is the one criterion git cannot rescue, so it is checked by hand.
+   issue, verified at the end of the week by `labels = tiro` — which, since
+   issues are created under the user's own account, is also the only way to tell
+   Tiro's issues from theirs. This is the one criterion git cannot rescue, so it
+   is checked by hand.
 8. **Useful.** By the end of the week the user has tagged at least twenty notes
    of their own accord. If they haven't, the jobs are wrong — and that is the
    real finding.
@@ -220,6 +225,7 @@ M2 is the part that makes everything else safe.
 | The CLI probe launches Obsidian on a machine where nobody wanted it running | Probe with a timeout and treat a slow answer as absent; the probe is in `tiro status`, which the user runs deliberately, before it is in the timer |
 | `dispatch` creates a duplicate issue after a crash or a retry | Frontmatter key first, then a JQL search on the note's `tiro-<uuid>` label, then create. Write-back is its own immediate commit. Tested by killing the process in the window |
 | The model is talked into dispatching something that was never signed off | `spec` → `needs-input` → the user writes `tiro: dispatch`. Two keys, and the model holds neither: the runner checks the state and the runner does the posting |
+| `acli` holds the user's own credential, with their full Jira permissions | `dispatch` only ever calls `search` and `create`, and is pinned to one project key by schema validation before `acli` is invoked. An auth failure blocks the note and journals it rather than retrying |
 | Jira credentials end up in the vault or a commit | `acli` holds the credentials; Tiro never reads, stores or passes a token. The pre-commit grep for token shapes stays as belt-and-braces |
 | `acli`'s `--from-json` schema turns out to differ from what we assumed | Pin a small payload schema we validate ourselves, with a `--generate-json` capture from the real instance as the fixture. A schema mismatch then fails in a test, not against live Jira |
 | The container can't reach the vault's git remote | `tiro status` checks push access on every run and journals a warning before the first job |
