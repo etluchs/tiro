@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tiro import protocol
-from tiro.config import Config
+from tiro.config import Config, as_vault_path
 from tiro.ops import BrokenLink, VaultOps
 from tiro.vcs import Git
 
@@ -92,7 +92,7 @@ def check(
     the first: a job that broke three rules should say so once."""
     result = GateResult(ok=True)
     required = REQUIRED_TRUST.get(verb, "L4")
-    declared_set = {d.replace("\\\\", "/").lstrip("/") for d in declared}
+    declared_set = {as_vault_path(d) for d in declared}
     move_src, move_dst = moved if moved else ("", "")
 
     if moved and verb not in MAY_MOVE:
