@@ -4,6 +4,11 @@ The goal of iteration 1 is **one week of Tiro running unattended against the rea
 vault without the user losing trust in it.** Not features. Trust. Everything here
 is chosen because it either earns trust or is needed to earn it.
 
+Two decisions are settled and shape what follows: Tiro runs on the **laptop,
+beside a live Obsidian** (so the CLI adapter is the expected path and `file`
+ships), and `dispatch`'s target is **Jira** (so the note → issue loop closes in
+this iteration, under the irreversibility rules in DESIGN §5.5).
+
 Design rationale: [DESIGN.md](DESIGN.md).
 
 ## What ships
@@ -18,12 +23,14 @@ Design rationale: [DESIGN.md](DESIGN.md).
 | `file` | apply an accepted triage proposal, rewriting inbound links | Closes the loop on triage under explicit human accept |
 | `research` | bounded, cited research into a note | The "wow" job; the one the user will actually tag things for |
 | `distill` | summarise a long note into a block | Cheap given `research`'s machinery |
-| `spec` | turn a note into a reviewable spec | The differentiator, without needing any external credentials |
+| `spec` | turn a note into a reviewable spec | The differentiator — and the human sign-off gate that `dispatch` depends on |
+| `dispatch` | create one Jira issue from a signed-off spec | Closes the loop from "a thought in my notes" to "a task an agent can pick up". The only irreversible job in the system, so it is also the most carefully fenced |
 | **The surface** | `Tiro/Journal/`, `Tiro/Questions.md`, `Tiro/Health.md` | How the user supervises without reading diffs |
 | **The CLI** | `adopt`, `once`, `lint`, `status`, `accept`, `undo`, `strip`, `chat` | `undo` matters more than any feature |
 
-**Not in iteration 1:** `dispatch` (Jira/GitLab/repo seeding), `reflect` (rule
-proposals), `index`, `connect`, `watch` mode, notifications, embeddings. The
+**Not in iteration 1:** GitLab and repo-seeding as dispatch targets, Jira
+read-back of any kind, `reflect` (rule proposals), `index`, `connect`, `watch`
+mode, notifications, embeddings. The
 correction log *is* written from day one so that `reflect` has data to work with
 in iteration 2 — logging costs nothing and the data cannot be recovered
 retroactively.
@@ -111,14 +118,41 @@ Journal writer, `Questions.md` index, `run.json` with tokens/cost/durations,
   `tiro undo <run-id>` returns the vault to its pre-run state, verified by
   `git diff`.
 
-### M6 — Unattended for a week (ongoing)
+### M6 — `dispatch` to Jira (1½ days)
+The only job that can do something git cannot undo, so it is built in the order
+that makes each step verifiable before the next one can hurt:
+
+1. `runner/jira.py` — a thin typed client, not an MCP tool: `search(jql)` and
+   `create(payload)`, nothing else. Two auth modes behind one interface (Cloud:
+   basic `email:api_token`; Data Center: PAT as a bearer token). Credentials from
+   the environment, never from the vault, never in a commit.
+2. The `dispatch` skill drafts a **payload**, not an issue — summary,
+   description, issue type, labels including the note's stable `tiro-<uuid>` — 
+   into a preview block. The model never holds a create-issue tool.
+3. The idempotency check: `tiro/jira` set → stop; else JQL on the label → adopt
+   if found; else create. Key written back and committed as its own commit,
+   immediately.
+4. Preview mode is the default. `dispatch.live = true` in `tiro.toml` is what the
+   user turns on, deliberately, after the previews look right.
+- **Done when:** five specs dispatched with five issues created — not six; the
+  crash window is tested by killing the process between create and write-back and
+  confirming the next run adopts rather than duplicates; a note with
+  `tiro/jira` already set is a no-op; and a spec that has not been signed off is
+  refused.
+
+### M7 — Unattended for a week (ongoing)
 systemd timer every 15 min. Daily: read the journal, check for stuck notes, tune
 budgets and `rules.md`. Log every correction.
 - **Done when:** seven consecutive days with no manual git intervention, no note
   stuck in `working`, and the user has not reverted anything.
 
-**Estimate: 8–9 focused days** (7–8 with the Obsidian CLI available, which pays
-for itself in M3 and M4), roughly half of it M2. That ratio is correct —
+**Estimate: ~9 focused days.** The Obsidian CLI saves about a day across M3 and
+M4; `dispatch` adds about one and a half. M2 is still nearly half the total,
+which remains the right ratio — it is what makes everything after it safe.
+
+Sequencing note: M6 can be built during the M7 week, but `dispatch.live` should
+not be switched on until the chassis has a few quiet days behind it. The one job
+with no undo is not the one to debug on day one. That ratio is correct —
 M2 is the part that makes everything else safe.
 
 ## Acceptance criteria for the iteration
@@ -135,7 +169,10 @@ M2 is the part that makes everything else safe.
 5. **Legible.** Every action appears in the journal with a link to the note.
 6. **Bounded.** No run exceeds its wall-clock or cost ceiling; exceeding one ends
    in `blocked`, never a half-written note.
-7. **Useful.** By the end of the week the user has tagged at least twenty notes
+7. **No duplicates.** Every dispatched spec corresponds to exactly one Jira
+   issue, verified by a JQL search over the `tiro-*` labels at the end of the
+   week. This is the one criterion git cannot rescue, so it is checked by hand.
+8. **Useful.** By the end of the week the user has tagged at least twenty notes
    of their own accord. If they haven't, the jobs are wrong — and that is the
    real finding.
 
@@ -168,6 +205,9 @@ M2 is the part that makes everything else safe.
 | The agent is talked into something by note content | Tool allowlist + `permission_mode="dontAsk"` + the gate. The four "never"s are enforced in code, not in the prompt |
 | Tiro and the Obsidian CLI write to the vault at the same time | The CLI runs inside the same run lock; its calls are verified against the filesystem afterwards, never trusted on their exit code |
 | The CLI probe launches Obsidian on a machine where nobody wanted it running | Probe with a timeout and treat a slow answer as absent; the probe is in `tiro status`, which the user runs deliberately, before it is in the timer |
+| `dispatch` creates a duplicate issue after a crash or a retry | Frontmatter key first, then a JQL search on the note's `tiro-<uuid>` label, then create. Write-back is its own immediate commit. Tested by killing the process in the window |
+| The model is talked into dispatching something that was never signed off | `spec` → `needs-input` → the user writes `tiro: dispatch`. Two keys, and the model holds neither: the runner checks the state and the runner does the posting |
+| Jira credentials end up in the vault or a commit | Credentials come from the environment only; `dispatch` runs with no vault write scope beyond the note it was invoked on; a pre-commit check greps the diff for token shapes |
 | The container can't reach the vault's git remote | `tiro status` checks push access on every run and journals a warning before the first job |
 
 ## First three commits
@@ -175,4 +215,5 @@ M2 is the part that makes everything else safe.
 1. `docs/`: this plan, the design, the prior art. *(you are here)*
 2. `CLAUDE.md` + `rules/`: the constitution and the protocol spec, as the
    normative text the skills and the runner both cite.
-3. M0 skeleton: `tiro status` against the real vault, read-only.
+3. M0 skeleton: `tiro status` against the real vault, read-only — including
+   which ops backend it found and whether Jira answers.

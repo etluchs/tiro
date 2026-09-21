@@ -208,9 +208,14 @@ This gives Tiro two honest deployment shapes:
 
 - **Companion** — Tiro runs beside a live Obsidian (laptop, or the dev container
   with the vault bind-mounted from the host). Full adapter, L4 enabled.
+  **This is the target for iteration 1.**
 - **Server** — the UZH container, vault reached only through git, no Obsidian.
   Filesystem adapter, L4 refused, `lint` reports its own approximation and says
   so. Everything else — protocol, jobs, gate, git, trust ladder — is identical.
+
+Building the adapter now rather than hard-wiring the companion shape costs almost
+nothing and keeps the server shape reachable later; assuming it and retrofitting
+would not.
 
 The CLI runs inside the same run lock as everything else; it is a second writer
 into the vault and is treated as one. Which adapter a run used is recorded in
@@ -403,6 +408,36 @@ Per job: `max_turns`, a timeout, and for `research` an explicit egress budget �
 N searches, domain allow/blocklist, every claim cited. Exceeding any bound ends
 the job as `blocked`, never as a half-written note.
 
+### 5.5 Irreversible effects
+
+Everything above rests on git: a bad job is a `git revert`. `dispatch` (§8) is
+the one job that leaves the vault and creates something — a Jira issue — that no
+revert can take back. It gets its own rules, and they are stricter than anything
+else in the system.
+
+1. **Two keys.** `spec` writes a spec and stops at `needs-input`. Only the user
+   writing `tiro: dispatch` releases it. Tiro never escalates a note from spec to
+   issue on its own, whatever the note says.
+2. **The model drafts, the runner posts.** The agent produces a *payload* —
+   summary, description, issue type, labels — into a preview block in the note.
+   A plain typed client posts it. Issue creation is not a tool the model gets to
+   call. Judgement and side effect are separated deliberately: the failure mode
+   of a model holding a create-issue tool is ten issues, and Jira has no undo.
+3. **Idempotency, belt and braces.** Jira has no idempotency key on create, so we
+   bring our own. Before posting: if `tiro/jira` is set on the note, stop —
+   already dispatched. Otherwise search Jira for the note's stable id
+   (`tiro-<uuid>`, carried as a label). Only if both miss do we create. The
+   resulting key is written back and committed immediately, as its own commit,
+   before anything else can fail.
+4. **The crash window is covered.** If the issue is created and the write-back
+   dies, the next run's label search finds the issue and adopts it rather than
+   creating a second one. That is why the label matters more than it looks.
+5. **Create only.** No transitions, no updates, no closes, no deletes. One
+   direction, one verb.
+6. **Dry run until proven.** `dispatch` starts in preview mode: it writes the
+   exact payload it *would* post into the note, and stops. Live posting is a
+   config flag the user turns on once the previews look right.
+
 ---
 
 ## 6. Git
@@ -492,18 +527,18 @@ A closed vocabulary. Each verb is one skill, one budget, one declared path scope
 | `research` | L2 | Bounded web research into a block: findings, sources with access dates, and an explicit "unverified" section. Never silently drops a contradiction | 1 |
 | `distill` | L2 | Summarise a long note or a set of highlights into a block, with links to what it draws on | 1 |
 | `spec` | L3 | Turn a tagged note into a well-formed spec note — problem, context, acceptance criteria, non-goals, open questions — and mark it `needs-input` for the user to sign off | 1 |
+| `dispatch` | L3 | Take a signed-off spec and create **one Jira issue** from it, under the rules in §5.5. Writes the issue key and URL back into the note. Create only. Other targets (GitLab, a seeded repo with `SPEC.md`) come later, behind the same seam | 1 |
 | `lint` | L0 | Whole-vault health: broken links, orphans, frontmatter violations, duplicate titles, notes stuck in the inbox. Read-only report to `Tiro/Health.md` | 1 |
 | `reflect` | L2 | Weekly: read the correction log, propose rule changes (§7) | 2 |
-| `dispatch` | L3 | Take a signed-off spec and hand it onward: a Jira issue, a GitLab issue, a seeded repo with the spec as `SPEC.md` and a `Backlog.md`-style task file. Writes the resulting URL back into the note | 2 |
 | `index` | L3 | Maintain Maps of Content / index notes for an area as its contents change | 2 |
 | `connect` | L2 | Propose links between notes that should know about each other; surface contradictions between notes | 3 |
 
-**Why `spec` ships without `dispatch`.** `spec` is the half that needs judgement
-and no credentials; `dispatch` is the half that needs credentials and no
-judgement. Splitting them means iteration 1 delivers the hard, valuable part
-against zero external systems, and the user reviews a spec in Obsidian before
-anything reaches a tracker. It also means the sign-off gate is free: a spec sits
-at `needs-input` until a human says go.
+**Why `spec` and `dispatch` are two verbs, not one.** `spec` is the half that
+needs judgement; `dispatch` is the half that has consequences. Keeping them
+apart puts a human between them for free — a spec sits at `needs-input` until
+someone says go — and it means the model's work ends at a payload the user can
+read in Obsidian, before anything reaches a tracker. The same seam takes GitLab
+or a seeded repo later without touching `spec` at all.
 
 ---
 
@@ -541,27 +576,37 @@ notification, and it arrives wherever the vault syncs.
 - **No deletion. Ever.**
 - **No conflict resolution in user prose.**
 - **No multi-user vault.** One vault, one owner.
+- **No Jira read-back.** Tiro creates an issue and records its key. It does not
+  sync status, comments or transitions in either direction. A one-way door is
+  something Tiro can be trusted with in week one; a bidirectional sync is a
+  product.
 - **Not a chat bot.** If the user wants a conversation, `tiro chat` is a Claude
   Code session. The unattended agent communicates in writing, in the vault.
 
-## 11. Open questions
+## 11. Decisions and open questions
+
+### Decided
+
+- **Companion shape.** Tiro runs on the laptop, beside a live Obsidian. The CLI
+  adapter is the expected path: L4 moves are enabled, `file` ships in iteration
+  1, and link data is authoritative. The filesystem backend is still built — as
+  the fallback, and as what keeps the server shape reachable.
+- **Jira is `dispatch`'s first target**, and `dispatch` moves into iteration 1
+  (§5.5, §8). GitLab and repo-seeding come later, behind the same
+  spec → payload → post seam.
+
+### Open
 
 1. **Which vault?** The trust ladder defaults and the `triage` prompt need the
-   real vault's shape. First build step is `tiro adopt` (§ITERATION-1 M1), which
+   real vault's shape. First build step is `tiro adopt` (ITERATION-1 M1), which
    reads the vault and *proposes* `rules.md` and `trust.toml` for the user to
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
-2. **Companion or server?** §3.4 makes this a real fork, not a detail: the
-   companion shape (Tiro beside a live Obsidian) gets the CLI, and with it L4
-   moves and authoritative link data; the server shape (UZH container, vault via
-   git only) does not, and `file` is refused there. Iteration 1 should target
-   whichever shape the user actually works in — and if it is the server, the
-   `file` verb slips to iteration 2 and the wikilink rewriter comes back onto the
-   critical path. Worth deciding before M4. (If the vault syncs via Obsidian Sync
-   rather than git, the official headless Sync client covers the server shape's
-   transport — but the README says git.)
-3. **Is `dispatch`'s first target Jira or GitLab?** UZH context suggests GitLab;
-   the README says Jira. Cheap either way, but it decides which MCP server and
-   which credentials iteration 2 needs.
-4. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
-   job that can get expensive. A per-day budget in `jobs.toml` is the lever;
-   the right number needs one week of real traffic.
+2. **Jira Cloud or Data Center?** It decides auth (`email:api_token` basic vs a
+   PAT as a bearer token), whether Atlassian's hosted MCP server is available at
+   all (Cloud only), and what the label search can rely on. The client is a thin
+   adapter either way — perhaps thirty lines differ — but the credentials and the
+   smoke test differ from day one. Needed with it: the project key, the default
+   issue type, and whether issues are created by a bot account or as the user.
+3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
+   job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
+   right number needs one week of real traffic.
