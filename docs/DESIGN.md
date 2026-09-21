@@ -10,6 +10,7 @@ The user signs.** Every design decision below falls out of it.
 - [Verdict on the sketch](#1-verdict-on-the-sketch)
 - [Principles](#2-principles)
 - [Architecture](#3-architecture)
+- [The Obsidian CLI](#34-the-obsidian-cli-adapter)
 - [The note protocol](#4-the-note-protocol)
 - [Safety](#5-safety)
 - [Git](#6-git)
@@ -36,7 +37,9 @@ dangerous line in the README.** It is the highest-risk, lowest-reward operation
 in the whole system. An agent moving files at OS level bypasses Obsidian's
 rename-link-rewrite and silently breaks the graph; "evolving rules" with no
 mechanism is just drift with no audit trail. Fix: organising is split into
-*classify* (safe, automatic) and *move* (gated, one-word human accept), and
+*classify* (safe, automatic) and *move* (gated, one-word human accept) — and where
+the Obsidian CLI is reachable, the move is delegated to Obsidian itself so its own
+link rewriting fires (§3.4). And
 "evolving" is given a concrete mechanism — a correction log and proposed rule
 diffs the user accepts (§7). Iteration 1 moves no file the user has not accepted.
 
@@ -159,7 +162,64 @@ prompt cache. Per-job budgets are set in `jobs.toml`.
 
 [Claude Agent SDK]: https://code.claude.com/docs/en/agent-sdk/python
 
-### 3.4 The control loop
+### 3.4 The Obsidian CLI adapter
+
+Obsidian shipped an [official CLI] in 1.12 (February 2026). It matters here,
+because it owns the two things Tiro would otherwise have to reimplement badly:
+
+| CLI gives us | What we'd otherwise write |
+|---|---|
+| `move` / `rename` — **with Obsidian's own link rewriting** | Our own wikilink rewriter, reimplementing Obsidian's resolution rules (shortest-path matching, aliases, `#heading` and `^block` refs, attachment folders). The single most bug-prone file in the project |
+| `unresolved`, `backlinks`, `links`, `orphans`, `deadends` | Most of `lint` — and, more importantly, a link resolver that has to agree with Obsidian's metadata cache, which is the actual ground truth |
+| `properties format=json` — every note's frontmatter, vault-wide, in one call | A full tree walk and YAML parse per run |
+| `search`, `tags`, `aliases`, `outline` | Grep approximations |
+| `command <id>` — run any Obsidian or plugin command | Fighting the Obsidian Git plugin instead of *asking* it to sync (§6) |
+
+It cannot be the execution path, for three reasons:
+
+1. **It needs the desktop app running.** The official `obsidian-headless` build is a
+   *Sync* client, not the CLI; the request for headless CLI support in Docker was
+   [closed as not planned]. Community containers exist (Xvfb + Electron + an
+   Insider `.asar`, `SYS_ADMIN`, `--no-sandbox`) but are not a foundation. Inside
+   the UZH dev container, `obsidian` is simply absent.
+2. **Exit codes are always 0**, even on failure. Disqualifying for a gate on its
+   own; every call must be verified against the filesystem afterwards regardless.
+3. **~1 second per command and no batching.** Vault-wide JSON queries, yes;
+   per-note loops over thousands of files, no.
+
+So: **a capability-detected adapter, not a dependency.** One internal interface —
+`move`, `unresolved`, `backlinks`, `properties`, `search` — with two
+implementations, chosen at startup by whether `obsidian version` answers:
+
+| | `ObsidianCliOps` | `FilesystemOps` |
+|---|---|---|
+| Link queries | Obsidian's metadata cache | our resolver, approximate, reported as such |
+| `move` (L4) | `obsidian move`, links rewritten by Obsidian | **refused** in iteration 1 — the note stays `needs-input` |
+| Frontmatter read | one vault-wide JSON call | tree walk |
+| Frontmatter write | filesystem (we control the exact bytes) | filesystem |
+
+Writes stay on the filesystem either way: Tiro owns its own block and key
+serialisation, and the gate needs to reason about a git diff, not about what a
+subprocess claims it did. The CLI is used for **queries, for moves, and as an
+oracle** — `unresolved` before and after a job is a cheap, authoritative
+invariant we could not otherwise compute.
+
+This gives Tiro two honest deployment shapes:
+
+- **Companion** — Tiro runs beside a live Obsidian (laptop, or the dev container
+  with the vault bind-mounted from the host). Full adapter, L4 enabled.
+- **Server** — the UZH container, vault reached only through git, no Obsidian.
+  Filesystem adapter, L4 refused, `lint` reports its own approximation and says
+  so. Everything else — protocol, jobs, gate, git, trust ladder — is identical.
+
+The CLI runs inside the same run lock as everything else; it is a second writer
+into the vault and is treated as one. Which adapter a run used is recorded in
+`run.json`.
+
+[official CLI]: https://obsidian.md/help/cli
+[closed as not planned]: https://github.com/obsidianmd/obsidian-headless/issues/8
+
+### 3.5 The control loop
 
 One pass of `tiro once`:
 
@@ -356,7 +416,10 @@ by `vault = "../vault"` in `tiro.toml`.
 
 **One syncer per vault.** If the user runs the Obsidian Git plugin or Obsidian
 Sync, Tiro is not also a syncer: it commits its own work and pushes, and it
-tolerates the other party's commits by rebasing at the start of each run. What it
+tolerates the other party's commits by rebasing at the start of each run. In the companion shape there is a better move still: rather than
+committing alongside the Obsidian Git plugin, Tiro can invoke it —
+`obsidian command id=obsidian-git:push` — and let the plugin stay the only
+syncer. What Tiro
 never does is resolve a conflict in the user's prose. On conflict:
 `git rebase --abort`, journal it, skip the run, tell the user. Their words are
 not ours to merge.
@@ -425,7 +488,7 @@ A closed vocabulary. Each verb is one skill, one budget, one declared path scope
 | Verb | Trust | What it does | Ships in |
 |---|---|---|---|
 | `triage` | L2 | Read an inbox note. Propose a title, tags, links to existing notes, and a destination folder (per `rules.md`). Write the proposal into the note. **Move nothing.** | 1 |
-| `file` | L4 | The user's accept of a triage proposal. Move the note, rewrite every inbound wikilink, commit as one revertible unit | 1 |
+| `file` | L4 | The user's accept of a triage proposal. Move the note via the Obsidian CLI so Obsidian rewrites every inbound link, verify with `unresolved`, commit as one revertible unit. Without the CLI: refused, note stays `needs-input` (§3.4) | 1 |
 | `research` | L2 | Bounded web research into a block: findings, sources with access dates, and an explicit "unverified" section. Never silently drops a contradiction | 1 |
 | `distill` | L2 | Summarise a long note or a set of highlights into a block, with links to what it draws on | 1 |
 | `spec` | L3 | Turn a tagged note into a well-formed spec note — problem, context, acceptance criteria, non-goals, open questions — and mark it `needs-input` for the user to sign off | 1 |
@@ -487,11 +550,15 @@ notification, and it arrives wherever the vault syncs.
    real vault's shape. First build step is `tiro adopt` (§ITERATION-1 M1), which
    reads the vault and *proposes* `rules.md` and `trust.toml` for the user to
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
-2. **Where does the container actually run?** A laptop (vault on disk, Tiro in a
-   container beside it) and a server (vault reached only through git, no
-   Obsidian, longer feedback loop) have different failure modes. The design works
-   for both; the timer cadence and the "skip recently-modified notes" window
-   differ.
+2. **Companion or server?** §3.4 makes this a real fork, not a detail: the
+   companion shape (Tiro beside a live Obsidian) gets the CLI, and with it L4
+   moves and authoritative link data; the server shape (UZH container, vault via
+   git only) does not, and `file` is refused there. Iteration 1 should target
+   whichever shape the user actually works in — and if it is the server, the
+   `file` verb slips to iteration 2 and the wikilink rewriter comes back onto the
+   critical path. Worth deciding before M4. (If the vault syncs via Obsidian Sync
+   rather than git, the official headless Sync client covers the server shape's
+   transport — but the README says git.)
 3. **Is `dispatch`'s first target Jira or GitLab?** UZH context suggests GitLab;
    the README says Jira. Cheap either way, but it decides which MCP server and
    which credentials iteration 2 needs.

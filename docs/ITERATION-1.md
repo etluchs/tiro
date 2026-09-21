@@ -11,6 +11,7 @@ Design rationale: [DESIGN.md](DESIGN.md).
 | | Capability | Why it's in |
 |---|---|---|
 | **The chassis** | scan → plan → run → gate → commit → push, with lock, budgets and per-job commits | Nothing else is safe without it |
+| **The vault-ops adapter** | one interface, two backends: Obsidian CLI when it answers, filesystem when it doesn't | Decides whether `file` and authoritative link data are available at all (DESIGN §3.4) |
 | **The protocol** | `tiro:` verbs, `tiro/*` keys, the hash rule, owned blocks, questions | Makes unattended operation possible at all |
 | `lint` | read-only vault health report | Zero risk, immediate value, and it proves Tiro can read the vault correctly before it writes to it |
 | `triage` | classify inbox notes, propose title/tags/links/destination — **move nothing** | The daily-value job, with the dangerous half removed |
@@ -35,8 +36,12 @@ retroactively.
 - `CLAUDE.md` (constitution), `rules/safety.md`, `rules/protocol.md`,
   `rules/output.md`.
 - `.claude/settings.json` with the tool allowlist.
+- `runner/ops.py`: the vault-ops interface and its capability probe
+  (`obsidian version`, with a timeout — it launches the app if it is not running,
+  so the probe must not be the thing that does that unexpectedly).
 - **Done when:** `tiro status` prints the resolved vault path, git state, trust
-  table and the job queue it *would* run, and touches nothing.
+  table, **which ops backend it detected**, and the job queue it *would* run, and
+  touches nothing.
 
 ### M1 — `tiro adopt` (1 day)
 Reads the vault and proposes, never imposes: infers the existing structure
@@ -58,29 +63,45 @@ read and move into place.
   no deletions, no unauthorised moves, link integrity, mtime unchanged.
 - `runner/git.py`: lock, rebase-or-abort, per-job commit with trailers, push,
   `undo`.
+- `runner/ops_fs.py` + `runner/ops_cli.py`: the two backends. The CLI backend
+  wraps every call in "exit code is always 0" paranoia — parse the output, then
+  verify the effect on the filesystem.
 - **Done when:** the property test holds — *for any note and any job, running
   the same job twice produces exactly one commit* — and the gate rejects each of
   six hand-built malicious/buggy diffs (deletes a note, edits prose outside a
   block, writes outside declared paths, breaks a wikilink, corrupts frontmatter,
   moves a file from an L1 folder).
 
-### M3 — `lint` (1 day)
+### M3 — `lint` (1 day, ½ with the CLI)
 Read-only. Broken wikilinks and embeds, orphans, frontmatter violations,
 duplicate titles, inbox notes older than N days, notes stuck in `working` or
 `blocked`. Writes `Tiro/Health.md` with counts, trend against last run, and the
 worst 20 items linked.
+
+With the CLI backend this is largely a formatter over `unresolved`, `orphans`,
+`deadends` and `properties format=json`. The filesystem backend keeps its own
+resolver and the report states which engine produced it — an approximation that
+claims to be authoritative is worse than no report.
 - **Done when:** the report's broken-link list matches a manual spot check on the
-  real vault, and running it twice changes only the timestamp.
+  real vault; where both backends are available, they agree on the broken-link
+  set (any disagreement is a bug in ours, and a useful one to find early);
+  running it twice changes only the timestamp.
 
 ### M4 — `triage`, `file`, `research`, `distill`, `spec` (3 days)
 One skill per verb under `.claude/skills/`, each with: purpose, the rules it must
 read first, the exact output block shape, its declared path scope, its budget,
-and worked examples. `file` gets the wikilink rewriter (all inbound links,
-including `[[note|alias]]`, `[[note#heading]]` and embeds) plus its own
-before/after link-integrity assertion.
+and worked examples.
+
+`file` delegates the move to `obsidian move` and asserts `unresolved` is no
+larger afterwards. **We do not write a wikilink rewriter in iteration 1.**
+Without the CLI, `file` refuses and leaves the note `needs-input` — taking the
+link-rewriting risk only when the tool that owns link semantics is present is
+worth more than the convenience, and it removes the most bug-prone file in the
+project from the critical path.
 - **Done when:** ten real inbox notes triaged end-to-end; the destination
   proposal is one the user agrees with in ≥7 of 10; `research` produces no
-  uncited claim across five notes; `file` moves ten notes with zero broken links.
+  uncited claim across five notes; `file` moves ten notes with `unresolved`
+  unchanged, or refuses cleanly on a vault with no CLI.
 
 ### M5 — The user-facing surface (1 day)
 Journal writer, `Questions.md` index, `run.json` with tokens/cost/durations,
@@ -96,7 +117,8 @@ budgets and `rules.md`. Log every correction.
 - **Done when:** seven consecutive days with no manual git intervention, no note
   stuck in `working`, and the user has not reverted anything.
 
-**Estimate: 8–9 focused days**, roughly half of it M2. That ratio is correct —
+**Estimate: 8–9 focused days** (7–8 with the Obsidian CLI available, which pays
+for itself in M3 and M4), roughly half of it M2. That ratio is correct —
 M2 is the part that makes everything else safe.
 
 ## Acceptance criteria for the iteration
@@ -144,6 +166,8 @@ M2 is the part that makes everything else safe.
 | Obsidian Git plugin and Tiro fight over the remote | One syncer: rebase at run start, abort on conflict, never merge prose |
 | Cost runs away on a busy inbox | Per-run and per-day ceilings; `research` is opt-in per note, never automatic |
 | The agent is talked into something by note content | Tool allowlist + `permission_mode="dontAsk"` + the gate. The four "never"s are enforced in code, not in the prompt |
+| Tiro and the Obsidian CLI write to the vault at the same time | The CLI runs inside the same run lock; its calls are verified against the filesystem afterwards, never trusted on their exit code |
+| The CLI probe launches Obsidian on a machine where nobody wanted it running | Probe with a timeout and treat a slow answer as absent; the probe is in `tiro status`, which the user runs deliberately, before it is in the timer |
 | The container can't reach the vault's git remote | `tiro status` checks push access on every run and journals a warning before the first job |
 
 ## First three commits
