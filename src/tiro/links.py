@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from tiro.config import as_vault_path
+
 _WIKILINK = re.compile(r"(!?)\[\[([^\[\]|#^]*)((?:[#^][^\[\]|]*)?)(?:\|([^\[\]]*))?\]\]")
 _MD_LINK = re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+?)(?:\s+\"[^\"]*\")?\)")
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -118,7 +120,7 @@ class Index:
                     self._by_alias.setdefault(alias.lower(), []).append(rel)
 
     def resolve(self, target: str, *, from_rel: str = "") -> str | None:
-        t = target.strip().replace("\\\\", "/").lstrip("./")
+        t = as_vault_path(target.strip()).lstrip("./")
         if not t:
             return from_rel or None
         key = t.lower()
