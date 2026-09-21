@@ -121,7 +121,7 @@ class ScriptedAgent:
 class ClaudeAgentRunner:
     """The real thing, on the Claude Agent SDK.
 
-    Read-only tools only. ``permission_mode=\"dontAsk\"`` because there is nobody
+    Read-only tools only. ``permission_mode="dontAsk"`` because there is nobody
     to ask, and ``setting_sources=[]`` so nothing inside the vault can widen the
     tool surface.
     """

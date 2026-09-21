@@ -59,7 +59,7 @@ def probe_obsidian(timeout: float = 5.0) -> Probe:
     ``obsidian version`` is documented to *launch* Obsidian if it is not
     running, which is not something a background timer should do behind the
     user's back. So the probe is cheap and bounded, a timeout counts as absent,
-    and ``[ops] backend = \"fs\"`` opts out of running it at all.
+    and ``[ops] backend = "fs"`` opts out of running it at all.
     """
     exe = shutil.which("obsidian")
     if not exe:
