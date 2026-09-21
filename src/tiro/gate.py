@@ -1,0 +1,170 @@
+"""The gate: what must be true before a job is allowed to become a commit.
+
+Policy is checked twice — once before a tool runs, once here against the actual
+working tree. The first is a decision; this is a fact. A job that fails the gate
+is rolled back and its note marked ``blocked``, never committed and never
+silently half-applied (DESIGN section 5.2, rules/safety.md).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from tiro import protocol
+from tiro.config import Config
+from tiro.ops import BrokenLink, VaultOps
+from tiro.vcs import Git
+
+#: The trust level each verb needs to *write* a path.
+REQUIRED_TRUST = {
+    "triage": "L2",
+    "file": "L2",
+    "research": "L2",
+    "distill": "L2",
+    "spec": "L3",
+    "dispatch": "L3",
+}
+MAY_MOVE = {"file"}
+
+#: A move is two permissions, not one, and they are not the same permission.
+#:
+#: Taking a note *out of* where the user put it is the risky half — that is what
+#: breaks the graph and loses things — so the source folder must be L4. Putting
+#: a note somewhere is ordinary creation, so the destination need only be L3.
+#:
+#: This is why the inbox is L4 in the recommended defaults: a folder whose whole
+#: purpose is that things leave it. And why filing *into* an area is opt-in per
+#: folder: an area stays L1 until the user says Tiro may put notes there, and
+#: until then `file` blocks with a message naming the folder and the level.
+MOVE_FROM_TRUST = "L4"
+MOVE_TO_TRUST = "L3"
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """The world as it was before the job ran."""
+
+    head: str
+    dirty: tuple[str, ...]
+    broken: frozenset[tuple[str, str]]
+    note_mtime: float
+
+
+@dataclass
+class GateResult:
+    ok: bool
+    failures: list[str] = field(default_factory=list)
+    changed: list[str] = field(default_factory=list)
+
+    def fail(self, why: str) -> None:
+        self.ok = False
+        self.failures.append(why)
+
+
+def _broken_set(links: list[BrokenLink]) -> frozenset[tuple[str, str]]:
+    return frozenset((b.note, b.target) for b in links)
+
+
+def snapshot(config: Config, git: Git, ops: VaultOps, note_rel: str) -> Snapshot:
+    ops.refresh()
+    note = config.vault / note_rel
+    return Snapshot(
+        head=git.head(),
+        dirty=tuple(git.dirty_paths()),
+        broken=_broken_set(ops.unresolved()),
+        note_mtime=note.stat().st_mtime if note.exists() else 0.0,
+    )
+
+
+def check(
+    config: Config,
+    git: Git,
+    ops: VaultOps,
+    *,
+    verb: str,
+    note_rel: str,
+    declared: list[str],
+    before: Snapshot,
+    moved: tuple[str, str] | None = None,
+) -> GateResult:
+    """Validate everything the job touched. Every failure is collected, not just
+    the first: a job that broke three rules should say so once."""
+    result = GateResult(ok=True)
+    required = REQUIRED_TRUST.get(verb, "L4")
+    declared_set = {d.replace("\\\\", "/").lstrip("/") for d in declared}
+    move_src, move_dst = moved if moved else ("", "")
+
+    if moved and verb not in MAY_MOVE:
+        result.fail(f"`{verb}` moved a note; only `file` may do that")
+    if moved:
+        if not config.trust.permits(move_src, MOVE_FROM_TRUST):
+            result.fail(
+                f"cannot move a note out of {move_src}: that folder is "
+                f"{config.trust.level_for(move_src)}, and moving out needs "
+                f"{MOVE_FROM_TRUST}"
+            )
+        if not config.trust.permits(move_dst, MOVE_TO_TRUST):
+            result.fail(
+                f"cannot file into {move_dst}: that folder is "
+                f"{config.trust.level_for(move_dst)}, and filing needs "
+                f"{MOVE_TO_TRUST}"
+            )
+
+    changed = [p for p in git.dirty_paths() if p not in before.dirty]
+    result.changed = changed
+
+    # 2. containment, and 6-by-proxy: anything we did not declare is a bug.
+    for path in changed:
+        if path not in declared_set:
+            result.fail(f"changed an undeclared path: {path}")
+        if path in (move_src, move_dst):
+            continue  # judged by the move rules above, not by the write rule
+        if not config.trust.permits(path, required):
+            result.fail(
+                f"{verb} needs {required} for {path}, which is "
+                f"{config.trust.level_for(path)}"
+            )
+
+    # 3 and 4. deletions and moves.
+    for line in git("status", "--porcelain", "-z").split("\0"):
+        if len(line) <= 3:
+            continue
+        code, path = line[:2], line[3:]
+        if path in before.dirty:
+            continue
+        if "D" in code and path != move_src:
+            result.fail(f"deleted {path}; Tiro never deletes a note")
+        if code.startswith("R") and path != move_src:
+            result.fail(f"renamed {path}; only a declared `file` move may do that")
+
+    # 1. the note still conforms.
+    note = config.vault / (move_dst if moved else note_rel)
+    if note.exists():
+        text = note.read_text(encoding="utf-8", errors="replace")
+        keys = protocol.read_keys(text)
+        status = keys.get("tiro/status")
+        if status and status not in protocol.STATUSES:
+            result.fail(f"invalid tiro/status: {status!r}")
+        for block in protocol.find_blocks(text):
+            if not block.id:
+                result.fail("a Tiro block has no id")
+        if "<!-- tiro:begin" in text and len(protocol.find_blocks(text)) == 0:
+            result.fail("a Tiro block was left unclosed")
+    elif note_rel != move_src:
+        result.fail(f"the note disappeared: {note_rel}")
+
+    # 5. link integrity. A link that resolved before must resolve now.
+    ops.refresh()
+    after = _broken_set(ops.unresolved())
+    for note_path, target in sorted(after - before.broken):
+        result.fail(f"broke a link: [[{target}]] in {note_path}")
+
+    return result
+
+
+def rollback(git: Git, declared: list[str], created: list[str] | None = None) -> None:
+    """Undo a job. ``created`` names paths Tiro itself made this run — only
+    those may be removed; everything else is merely restored."""
+    git.discard(created or [])
+    git.restore(declared)
