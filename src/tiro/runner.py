@@ -19,6 +19,7 @@ from pathlib import Path
 from tiro import gate, journal, protocol
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest
 from tiro.config import Config
+from tiro.jira import Acli, JiraError, build_payload, note_label
 from tiro.ops import OpsUnavailable, VaultOps
 from tiro.scan import Job, iter_notes, scan
 from tiro.vcs import Git, LockBusy, run_lock
@@ -117,6 +118,12 @@ def apply_output(
         raise _NoteMovedUnderUs(job.rel)
 
     text, note_id = protocol.ensure_id(text)
+
+    if job.verb == "dispatch":
+        # Before the note is written, because the issue key is one of the
+        # things being written. A failure here leaves the note untouched.
+        output = _dispatch(config, job, output, run_id=run_id, note_id=note_id)
+
     if output.block.strip():
         text = protocol.upsert_block(text, job=job.verb, id=note_id, body=output.block)
     for key, value in output.keys.items():
@@ -165,6 +172,76 @@ def apply_output(
 
 class _NoteMovedUnderUs(Exception):
     pass
+
+
+def _dispatch(
+    config: Config,
+    job: Job,
+    output: JobOutput,
+    *,
+    run_id: str,
+    note_id: str,
+) -> JobOutput:
+    """Turn a drafted payload into at most one Jira issue (DESIGN section 5.5).
+
+    The order is the safety property: check the note, then ask Jira, then
+    create, then let the caller write the key. Every exit from this function is
+    either "an issue already exists and here is its key" or "nothing was
+    created".
+    """
+    if output.status != "done":
+        return output  # the agent asked a question; nothing to file
+
+    note = config.vault / job.rel
+    existing = protocol.read_keys(note.read_text(encoding="utf-8")).get("tiro/jira")
+    if existing:
+        output.detail = f"already filed as {existing}"
+        return output
+
+    if not config.dispatch.project:
+        raise JiraError("no dispatch.project configured; refusing to guess one")
+
+    payload = build_payload(
+        output.payload,
+        project=config.dispatch.project,
+        default_type=config.dispatch.issue_type,
+        note_rel=job.rel,
+        note_id=note_id,
+        run_id=run_id,
+    )
+
+    if not config.dispatch.live:
+        # Preview: show exactly what would be posted and stop. The user turns
+        # on dispatch.live once the payloads look right.
+        body = json.dumps(payload.to_json(config.dispatch.project), indent=2)
+        output.block = (
+            f"{output.block}\n\n"
+            "> [!warning] Preview only — nothing has been created.\n"
+            "> Set `dispatch.live = true` in `tiro.toml` to file it.\n\n"
+            f"```json\n{body}\n```"
+        ).strip()
+        output.status = "needs-input"
+        output.detail = output.detail or "drafted a payload; preview only"
+        return output
+
+    acli = Acli(site=config.dispatch.site)
+    label = note_label(note_id)
+    # Jira has no idempotency key, so this search is ours. If it fails we stop:
+    # creating on an unreadable answer is how duplicates happen.
+    found = acli.search(f'labels = "{label}" ORDER BY created ASC')
+    if found:
+        output.keys["tiro/jira"] = found[0]
+        output.detail = f"adopted the existing issue {found[0]}"
+        return output
+
+    key = acli.create(
+        payload,
+        project=config.dispatch.project,
+        workdir=config.tiro_dir / "runs" / run_id,
+    )
+    output.keys["tiro/jira"] = key
+    output.detail = f"filed as {key}"
+    return output
 
 
 def execute_job(
@@ -216,7 +293,7 @@ def execute_job(
     except _NoteMovedUnderUs:
         git.restore([job.rel])
         return Outcome("skipped", "the user edited the note while we worked on it")
-    except (AgentError, OpsUnavailable) as exc:
+    except (AgentError, OpsUnavailable, JiraError) as exc:
         git.restore([job.rel])
         _block_note(config, job, str(exc), run_id)
         _commit_block(git, job, run_id)
@@ -233,13 +310,14 @@ def execute_job(
         _commit_block(git, job, run_id)
         return Outcome("blocked", "gate: " + "; ".join(result.failures))
 
+    outcome_name = "preview" if (job.verb == "dispatch" and not config.dispatch.live) else output.status
     summary = output.detail or f"{job.verb} {job.rel}"
     sha = git.commit(
         declared,
         f"tiro({job.verb}): {Path(job.rel).stem}\n\n{summary}",
         _trailers(run_id, job),
     )
-    return Outcome(output.status, output.detail, sha or "")
+    return Outcome(outcome_name, output.detail, sha or "")
 
 
 def _commit_block(git: Git, job: Job, run_id: str) -> None:
