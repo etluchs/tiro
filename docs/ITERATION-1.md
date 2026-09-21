@@ -46,9 +46,11 @@ retroactively.
 - `runner/ops.py`: the vault-ops interface and its capability probe
   (`obsidian version`, with a timeout — it launches the app if it is not running,
   so the probe must not be the thing that does that unexpectedly).
+- The tool allowlist, with `Bash(git *)`, `Bash(obsidian *)` and `Bash(acli *)`
+  explicitly denied: all three are the runner's, not the agent's.
 - **Done when:** `tiro status` prints the resolved vault path, git state, trust
-  table, **which ops backend it detected**, and the job queue it *would* run, and
-  touches nothing.
+  table, **which ops backend it detected**, whether `acli` is installed and
+  authenticated, and the job queue it *would* run — and touches nothing.
 
 ### M1 — `tiro adopt` (1 day)
 Reads the vault and proposes, never imposes: infers the existing structure
@@ -122,10 +124,13 @@ Journal writer, `Questions.md` index, `run.json` with tokens/cost/durations,
 The only job that can do something git cannot undo, so it is built in the order
 that makes each step verifiable before the next one can hurt:
 
-1. `runner/jira.py` — a thin typed client, not an MCP tool: `search(jql)` and
-   `create(payload)`, nothing else. Two auth modes behind one interface (Cloud:
-   basic `email:api_token`; Data Center: PAT as a bearer token). Credentials from
-   the environment, never from the vault, never in a commit.
+0. `acli` goes into the dev image, and `acli jira auth login` is a setup step,
+   not a Tiro concern. Tiro never sees a token.
+1. `runner/jira.py` — a wrapper over two `acli` calls and nothing else:
+   `search(jql)` and `create(payload)`, both via `--json`, both verified
+   afterwards because the exit codes are undocumented. The payload schema is
+   ours, small and validated (project, type, summary, description, labels), with
+   a real `--generate-json` capture from the actual instance as the fixture.
 2. The `dispatch` skill drafts a **payload**, not an issue — summary,
    description, issue type, labels including the note's stable `tiro-<uuid>` — 
    into a preview block. The model never holds a create-issue tool.
@@ -136,9 +141,10 @@ that makes each step verifiable before the next one can hurt:
    user turns on, deliberately, after the previews look right.
 - **Done when:** five specs dispatched with five issues created — not six; the
   crash window is tested by killing the process between create and write-back and
-  confirming the next run adopts rather than duplicates; a note with
-  `tiro/jira` already set is a no-op; and a spec that has not been signed off is
-  refused.
+  confirming the next run adopts rather than duplicates; a note with `tiro/jira`
+  already set is a no-op; a spec that has not been signed off is refused; and
+  `acli` is denied to the agent, asserted by a test that the allowlist rejects
+  `Bash(acli *)`.
 
 ### M7 — Unattended for a week (ongoing)
 systemd timer every 15 min. Daily: read the journal, check for stuck notes, tune
@@ -207,7 +213,8 @@ M2 is the part that makes everything else safe.
 | The CLI probe launches Obsidian on a machine where nobody wanted it running | Probe with a timeout and treat a slow answer as absent; the probe is in `tiro status`, which the user runs deliberately, before it is in the timer |
 | `dispatch` creates a duplicate issue after a crash or a retry | Frontmatter key first, then a JQL search on the note's `tiro-<uuid>` label, then create. Write-back is its own immediate commit. Tested by killing the process in the window |
 | The model is talked into dispatching something that was never signed off | `spec` → `needs-input` → the user writes `tiro: dispatch`. Two keys, and the model holds neither: the runner checks the state and the runner does the posting |
-| Jira credentials end up in the vault or a commit | Credentials come from the environment only; `dispatch` runs with no vault write scope beyond the note it was invoked on; a pre-commit check greps the diff for token shapes |
+| Jira credentials end up in the vault or a commit | `acli` holds the credentials; Tiro never reads, stores or passes a token. The pre-commit grep for token shapes stays as belt-and-braces |
+| `acli`'s `--from-json` schema turns out to differ from what we assumed | Pin a small payload schema we validate ourselves, with a `--generate-json` capture from the real instance as the fixture. A schema mismatch then fails in a test, not against live Jira |
 | The container can't reach the vault's git remote | `tiro status` checks push access on every run and journals a warning before the first job |
 
 ## First three commits
@@ -216,4 +223,4 @@ M2 is the part that makes everything else safe.
 2. `CLAUDE.md` + `rules/`: the constitution and the protocol spec, as the
    normative text the skills and the runner both cite.
 3. M0 skeleton: `tiro status` against the real vault, read-only — including
-   which ops backend it found and whether Jira answers.
+   which ops backend it found and whether `acli` is installed and authenticated.

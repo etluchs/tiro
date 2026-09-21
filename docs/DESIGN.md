@@ -156,6 +156,16 @@ pre-approved rather than prompt — there is nobody to prompt), `max_turns`, and
 `setting_sources=["project"]` so the vault's own settings cannot widen Tiro's
 tool surface.
 
+**Tiro reimplements nothing it can delegate.** Three vendor tools own semantics
+we should not be re-deriving: `git` owns history and rollback, `obsidian` owns
+link resolution and moves (§3.4), and `acli` — Atlassian's CLI, which belongs in
+the dev image regardless — owns Jira auth and the REST surface (§5.5). All three
+are called by the **runner**, never exposed to the agent: the tool allowlist
+denies `Bash(git *)`, `Bash(obsidian *)` and `Bash(acli *)` outright. Tiro's own
+code is then a small thing — the protocol, the scan, the gate, the journal.
+None of the three is trusted on its exit code; each call is verified against the
+world afterwards.
+
 Model: `claude-opus-5` for `research` and `spec`; the same model at
 `effort: "low"` for `triage`, which is a classification job. One model means one
 prompt cache. Per-job budgets are set in `jobs.toml`.
@@ -420,15 +430,20 @@ else in the system.
    issue on its own, whatever the note says.
 2. **The model drafts, the runner posts.** The agent produces a *payload* —
    summary, description, issue type, labels — into a preview block in the note.
-   A plain typed client posts it. Issue creation is not a tool the model gets to
-   call. Judgement and side effect are separated deliberately: the failure mode
+   The runner posts it with `acli jira workitem create --from-json`. Issue
+   creation is not a tool the model gets to call, and `Bash(acli *)` is denied to
+   it: `acli` being a command line does not make it the agent's command line.
+   Judgement and side effect are separated deliberately, because the failure mode
    of a model holding a create-issue tool is ten issues, and Jira has no undo.
+   Using `acli` rather than our own HTTP client changes nothing about that seam —
+   it just means we never handle a token (`acli jira auth login` does), never
+   hand-roll ADF, and inherit whatever Atlassian fixes.
 3. **Idempotency, belt and braces.** Jira has no idempotency key on create, so we
    bring our own. Before posting: if `tiro/jira` is set on the note, stop —
-   already dispatched. Otherwise search Jira for the note's stable id
-   (`tiro-<uuid>`, carried as a label). Only if both miss do we create. The
-   resulting key is written back and committed immediately, as its own commit,
-   before anything else can fail.
+   already dispatched. Otherwise `acli jira workitem search --jql` for the note's
+   stable id (`tiro-<uuid>`, carried as a label). Only if both miss do we create.
+   The key — read out of `--json` output — is written back and committed
+   immediately, as its own commit, before anything else can fail.
 4. **The crash window is covered.** If the issue is created and the write-back
    dies, the next run's label search finds the issue and adopts it rather than
    creating a second one. That is why the label matters more than it looks.
@@ -437,6 +452,17 @@ else in the system.
 6. **Dry run until proven.** `dispatch` starts in preview mode: it writes the
    exact payload it *would* post into the note, and stops. Live posting is a
    config flag the user turns on once the previews look right.
+
+Three things about `acli` to build around rather than discover later. Its
+`--from-json` format is thinly documented and `--generate-json` is reported to be
+inadequate for anything beyond simple fields — so Tiro pins a **small payload
+schema it validates itself** (project, type, summary, description, labels) and
+keeps a real `--generate-json` capture from the actual instance as a test
+fixture, rather than letting the model invent field names. Its output is the raw
+REST v3 response, which means descriptions come back as ADF; another reason
+create-only (§8) is the right scope, since nothing has to parse ADF. And its exit
+codes are undocumented, so the rule from §3.4 applies unchanged: parse `--json`,
+then confirm by searching for the key we think we just created.
 
 ---
 
@@ -601,12 +627,12 @@ notification, and it arrives wherever the vault syncs.
    real vault's shape. First build step is `tiro adopt` (ITERATION-1 M1), which
    reads the vault and *proposes* `rules.md` and `trust.toml` for the user to
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
-2. **Jira Cloud or Data Center?** It decides auth (`email:api_token` basic vs a
-   PAT as a bearer token), whether Atlassian's hosted MCP server is available at
-   all (Cloud only), and what the label search can rely on. The client is a thin
-   adapter either way — perhaps thirty lines differ — but the credentials and the
-   smoke test differ from day one. Needed with it: the project key, the default
-   issue type, and whether issues are created by a bot account or as the user.
+2. **Jira Cloud or Data Center?** `acli` documents both, but as separate command
+   references — so the flags `dispatch` depends on (`--from-json`, `--json`,
+   `workitem search --jql`) need confirming against the Data Center surface
+   before M6 assumes them, and the login differs (API token vs a PAT). Needed
+   with it: the site, the project key, the default issue type, and whether issues
+   are created by a bot account or as the user.
 3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
    job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
    right number needs one week of real traffic.
