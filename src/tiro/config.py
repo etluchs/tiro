@@ -24,6 +24,11 @@ TRUST_MEANING = {
 }
 
 
+def as_vault_path(value: str | Path) -> str:
+    """Normalise to the vault-relative POSIX form every comparison assumes."""
+    return str(value).replace("\\", "/").lstrip("/")
+
+
 class ConfigError(Exception):
     """Raised when configuration is missing or nonsensical. Always fatal."""
 
@@ -47,10 +52,10 @@ class TrustMap:
     folders: dict[str, str] = field(default_factory=dict)
 
     def level_for(self, rel_path: str | Path) -> str:
-        rel = str(rel_path).replace("\\\\", "/").lstrip("/")
+        rel = as_vault_path(rel_path)
         best, best_len = self.default, -1
         for prefix, level in self.folders.items():
-            p = prefix.replace("\\\\", "/").lstrip("/")
+            p = as_vault_path(prefix)
             if rel.startswith(p) and len(p) > best_len:
                 best, best_len = level, len(p)
         return best
