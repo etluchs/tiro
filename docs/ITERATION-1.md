@@ -4,10 +4,12 @@ The goal of iteration 1 is **one week of Tiro running unattended against the rea
 vault without the user losing trust in it.** Not features. Trust. Everything here
 is chosen because it either earns trust or is needed to earn it.
 
-Two decisions are settled and shape what follows: Tiro runs on the **laptop,
+Three decisions are settled and shape what follows: Tiro runs on the **laptop,
 beside a live Obsidian** (so the CLI adapter is the expected path and `file`
-ships), and `dispatch`'s target is **Jira** (so the note → issue loop closes in
-this iteration, under the irreversibility rules in DESIGN §5.5).
+ships); `dispatch`'s target is **Jira Cloud** (so the note → issue loop closes in
+this iteration, under the irreversibility rules in DESIGN §5.5); and it posts
+through **`acli`**, which lives in the dev image and holds the credentials Tiro
+therefore never touches.
 
 Design rationale: [DESIGN.md](DESIGN.md).
 
@@ -124,13 +126,18 @@ Journal writer, `Questions.md` index, `run.json` with tokens/cost/durations,
 The only job that can do something git cannot undo, so it is built in the order
 that makes each step verifiable before the next one can hurt:
 
-0. `acli` goes into the dev image, and `acli jira auth login` is a setup step,
-   not a Tiro concern. Tiro never sees a token.
+0. `acli` goes into the dev image.
+   `acli jira auth login --site "<site>.atlassian.net" --email "<you>" --token`
+   with the token piped in is a setup step, not a Tiro concern — Tiro never sees
+   a token. `tiro status` reports whether it is authenticated; it does not
+   attempt to authenticate.
 1. `runner/jira.py` — a wrapper over two `acli` calls and nothing else:
    `search(jql)` and `create(payload)`, both via `--json`, both verified
    afterwards because the exit codes are undocumented. The payload schema is
-   ours, small and validated (project, type, summary, description, labels), with
-   a real `--generate-json` capture from the actual instance as the fixture.
+   ours, small and validated (project, type, summary, plain-text description,
+   labels), with a real `--generate-json` capture from the actual site as the
+   fixture. Descriptions go up as plain text; Jira Cloud does the ADF
+   conversion, so Tiro never authors ADF.
 2. The `dispatch` skill drafts a **payload**, not an issue — summary,
    description, issue type, labels including the note's stable `tiro-<uuid>` — 
    into a preview block. The model never holds a create-issue tool.

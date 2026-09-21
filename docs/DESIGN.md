@@ -437,7 +437,8 @@ else in the system.
    of a model holding a create-issue tool is ten issues, and Jira has no undo.
    Using `acli` rather than our own HTTP client changes nothing about that seam —
    it just means we never handle a token (`acli jira auth login` does), never
-   hand-roll ADF, and inherit whatever Atlassian fixes.
+   hand-roll ADF (`--description` takes plain text and Jira Cloud does the
+   conversion), and inherit whatever Atlassian fixes.
 3. **Idempotency, belt and braces.** Jira has no idempotency key on create, so we
    bring our own. Before posting: if `tiro/jira` is set on the note, stop —
    already dispatched. Otherwise `acli jira workitem search --jql` for the note's
@@ -453,16 +454,16 @@ else in the system.
    exact payload it *would* post into the note, and stops. Live posting is a
    config flag the user turns on once the previews look right.
 
-Three things about `acli` to build around rather than discover later. Its
+Two things about `acli` to build around rather than discover later. Its
 `--from-json` format is thinly documented and `--generate-json` is reported to be
 inadequate for anything beyond simple fields — so Tiro pins a **small payload
 schema it validates itself** (project, type, summary, description, labels) and
 keeps a real `--generate-json` capture from the actual instance as a test
-fixture, rather than letting the model invent field names. Its output is the raw
-REST v3 response, which means descriptions come back as ADF; another reason
-create-only (§8) is the right scope, since nothing has to parse ADF. And its exit
-codes are undocumented, so the rule from §3.4 applies unchanged: parse `--json`,
-then confirm by searching for the key we think we just created.
+fixture, rather than letting the model invent field names. And its exit codes are
+undocumented, so the rule from §3.4 applies unchanged: parse `--json`, then
+confirm by searching for the key we think we just created. (Its output is the raw
+REST v3 response, so anything read *back* would arrive as ADF — a third reason
+create-only is the right scope, since nothing then has to parse it.)
 
 ---
 
@@ -559,6 +560,17 @@ A closed vocabulary. Each verb is one skill, one budget, one declared path scope
 | `index` | L3 | Maintain Maps of Content / index notes for an area as its contents change | 2 |
 | `connect` | L2 | Propose links between notes that should know about each other; surface contradictions between notes | 3 |
 
+**Where this goes next.** The README's ambition is notes turning into "actionable
+items for fellow agents to work on", and on Jira Cloud that last step is
+[already a product feature]: a work item can be assigned to an agent the way it
+is assigned to a colleague, or triggered by a workflow transition. So the
+iteration-2 move is not a new integration — it is one optional `assignee` field
+in the payload `acli` already accepts. Whether an agent assignee is addressable
+by account ID through the API, as opposed to only in the UI, is the thing to
+check before promising it.
+
+[already a product feature]: https://support.atlassian.com/jira-software-cloud/docs/collaborate-on-work-items-with-ai-agents/
+
 **Why `spec` and `dispatch` are two verbs, not one.** `spec` is the half that
 needs judgement; `dispatch` is the half that has consequences. Keeping them
 apart puts a human between them for free — a spec sits at `needs-input` until
@@ -620,6 +632,11 @@ notification, and it arrives wherever the vault syncs.
 - **Jira is `dispatch`'s first target**, and `dispatch` moves into iteration 1
   (§5.5, §8). GitLab and repo-seeding come later, behind the same
   spec → payload → post seam.
+- **Jira Cloud**, posted through `acli`. This settles the command surface (the
+  `acli` reference we designed against is the Cloud one), the login
+  (`acli jira auth login --site … --email … --token` with the token piped in),
+  plain-text descriptions on create, and it keeps agent-assignee and the hosted
+  MCP server available as later options.
 
 ### Open
 
@@ -627,12 +644,12 @@ notification, and it arrives wherever the vault syncs.
    real vault's shape. First build step is `tiro adopt` (ITERATION-1 M1), which
    reads the vault and *proposes* `rules.md` and `trust.toml` for the user to
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
-2. **Jira Cloud or Data Center?** `acli` documents both, but as separate command
-   references — so the flags `dispatch` depends on (`--from-json`, `--json`,
-   `workitem search --jql`) need confirming against the Data Center surface
-   before M6 assumes them, and the login differs (API token vs a PAT). Needed
-   with it: the site, the project key, the default issue type, and whether issues
-   are created by a bot account or as the user.
+2. **Four setup values, not really design questions:** the site
+   (`<something>.atlassian.net`), the project key, the default issue type, and
+   whether issues are created by a bot account or as you. The last one is the
+   only one with a consequence worth thinking about — issues created as you are
+   indistinguishable from issues you filed yourself, which is either convenient
+   or misleading depending on who else reads the board.
 3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
    job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
    right number needs one week of real traffic.
