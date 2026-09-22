@@ -52,6 +52,11 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.tiro.once.plist
 
 ## Watch it
 
+The schedule is hourly on the hour, 07:00 to 22:00, set with
+`StartCalendarInterval`. An interval cannot express a window, and a vault does
+not need attention at 04:00. A fire missed because the machine was asleep runs
+once on wake, not once per hour missed.
+
 ```sh
 launchctl print gui/$(id -u)/local.tiro.once | head -20   # is it loaded, when did it last run
 tail -f ~/Library/Logs/tiro.log                           # what it printed
