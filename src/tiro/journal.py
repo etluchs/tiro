@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tiro import protocol
+from tiro.agent import Usage
 from tiro.config import Config
 from tiro.scan import iter_notes
 
@@ -21,6 +22,7 @@ class Entry:
     outcome: str  # done | blocked | needs-input | preview | skipped
     detail: str = ""
     commit: str = ""
+    usage: Usage = field(default_factory=Usage)
 
 
 @dataclass
@@ -32,11 +34,16 @@ class RunRecord:
     entries: list[Entry] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    cost_usd: float = 0.0
-    tokens: int = 0
+    usage: Usage = field(default_factory=Usage)
 
     def add(self, entry: Entry) -> None:
+        """Record a job, and roll its usage into the run's total.
+
+        The totals used to be fields nobody assigned, so every run.json said
+        zero tokens and zero dollars however much the run had spent.
+        """
         self.entries.append(entry)
+        self.usage.add(entry.usage)
 
     def note_line(self, line: str) -> None:
         self.notes.append(line)
@@ -70,7 +77,8 @@ def write_journal(config: Config, record: RunRecord) -> Path:
 
     lines = [f"\n## Run {record.run_id}", ""]
     lines.append(f"Backend: `{record.ops_backend}`. "
-                 f"{len(record.entries)} job(s), {len(record.skipped)} skipped.")
+                 f"{len(record.entries)} job(s), {len(record.skipped)} skipped. "
+                 + spend(record.usage))
     lines.append("")
     if not (record.entries or record.skipped or record.notes):
         lines.append("- nothing to do")
@@ -123,6 +131,22 @@ def write_questions(config: Config) -> Path:
         body.append("")
     path.write_text("\n".join(body), encoding="utf-8")
     return path
+
+
+def spend(usage: Usage) -> str:
+    """What a run cost, in words, for the top of the journal entry.
+
+    An unreported cost says so rather than printing $0.00 — on a Claude
+    subscription the SDK often reports no dollar figure, and a journal that
+    claims every run was free is how a budget goes unnoticed.
+    """
+    if not usage.total_tokens:
+        return "No model time."
+    tokens = f"{usage.total_tokens:,} tokens"
+    if usage.cache_read_tokens:
+        tokens += f" ({usage.cache_read_tokens:,} from cache)"
+    cost = f"${usage.cost_usd:.2f}" if usage.cost_usd is not None else "cost not reported"
+    return f"{tokens}, {cost}."
 
 
 def _link(rel: str) -> str:

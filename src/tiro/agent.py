@@ -61,6 +61,60 @@ class JobRequest:
 
 
 @dataclass
+class Usage:
+    """What a job cost. Kept per job so the per-day ceiling has real numbers to
+    be set from (DESIGN section 5.4 and open question 3).
+
+    ``cost_usd`` is ``None`` rather than ``0.0`` when the SDK did not report a
+    cost — on a Claude subscription it often does not — because "free" and
+    "unknown" are different facts and a budget built on the wrong one is worse
+    than no budget.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd: float | None = None
+
+    @property
+    def total_tokens(self) -> int:
+        return (self.input_tokens + self.output_tokens
+                + self.cache_read_tokens + self.cache_write_tokens)
+
+    def add(self, other: "Usage") -> None:
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.cache_write_tokens += other.cache_write_tokens
+        if other.cost_usd is not None:
+            self.cost_usd = (self.cost_usd or 0.0) + other.cost_usd
+
+    @classmethod
+    def from_sdk(cls, raw: dict | None) -> "Usage":
+        """Read the SDK's ``usage``, which is a **dict**, not an object.
+
+        It was read with ``getattr`` once, which silently returned the default
+        for every field and reported zero tokens on every run.
+        """
+        raw = raw or {}
+
+        def n(*names: str) -> int:
+            for name in names:
+                value = raw.get(name)
+                if value is not None:
+                    return int(value)
+            return 0
+
+        return cls(
+            input_tokens=n("input_tokens"),
+            output_tokens=n("output_tokens"),
+            cache_read_tokens=n("cache_read_input_tokens", "cache_read_tokens"),
+            cache_write_tokens=n("cache_creation_input_tokens", "cache_creation_tokens"),
+        )
+
+
+@dataclass
 class JobOutput:
     """What a job produced. The runner decides what to do with it."""
 
@@ -69,8 +123,7 @@ class JobOutput:
     keys: dict[str, str] = field(default_factory=dict)
     payload: dict | None = None
     detail: str = ""
-    cost_usd: float = 0.0
-    tokens: int = 0
+    usage: Usage = field(default_factory=Usage)
 
     @classmethod
     def from_json(cls, data: dict) -> "JobOutput":
@@ -189,20 +242,27 @@ class ClaudeAgentRunner:
 
         options = ClaudeAgentOptions(**agent_options(request, root=self.config.root))
         chunks: list[str] = []
-        cost = 0.0
-        tokens = 0
+        per_turn = Usage()  # summed from each AssistantMessage
+        final: Usage | None = None  # the ResultMessage's own totals, if any
+        cost: float | None = None
+
         async for message in query(prompt=request.skill, options=options):
             for block in getattr(message, "content", []) or []:
                 text = getattr(block, "text", None)
                 if text:
                     chunks.append(text)
-            usage = getattr(message, "usage", None)
-            if usage:
-                tokens += int(getattr(usage, "output_tokens", 0) or 0)
-            total = getattr(message, "total_cost_usd", None)
-            if total:
-                cost = float(total)
+            raw = getattr(message, "usage", None)
+            # Only ResultMessage has total_cost_usd, so it is how we tell the
+            # run's totals from one turn's — adding both would double-count.
+            if hasattr(message, "total_cost_usd"):
+                if raw:
+                    final = Usage.from_sdk(raw)
+                if message.total_cost_usd is not None:
+                    cost = float(message.total_cost_usd)
+            elif raw:
+                per_turn.add(Usage.from_sdk(raw))
 
         output = parse_result("\n".join(chunks))
-        output.cost_usd, output.tokens = cost, tokens
+        output.usage = final or per_turn
+        output.usage.cost_usd = cost
         return output

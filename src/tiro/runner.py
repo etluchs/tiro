@@ -12,12 +12,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from tiro import gate, journal, protocol
-from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest
+from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
 from tiro.jira import Acli, JiraError, build_payload, note_label
 from tiro.ops import OpsUnavailable, VaultOps
@@ -30,6 +30,7 @@ class Outcome:
     outcome: str
     detail: str = ""
     commit: str = ""
+    usage: Usage = field(default_factory=Usage)
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -400,7 +401,7 @@ def _execute(
         f"tiro({job.verb}): {Path(job.rel).stem}\n\n{summary}",
         _trailers(run_id, job),
     )
-    return Outcome(outcome_name, output.detail, sha or "")
+    return Outcome(outcome_name, output.detail, sha or "", output.usage)
 
 
 def _commit_block(git: Git, job: Job, run_id: str) -> None:
@@ -499,7 +500,7 @@ def once(
 
             outcome = execute_job(config, git, ops, agent, job, run_id=run_id)
             record.add(journal.Entry(job.verb, job.rel, outcome.outcome,
-                                     outcome.detail, outcome.commit))
+                                     outcome.detail, outcome.commit, outcome.usage))
 
         journal.write_questions(config)
         record.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")

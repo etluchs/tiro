@@ -408,3 +408,63 @@ def test_without_rules_the_skill_is_told_to_infer_rather_than_ask(ready, vault: 
     agent = _agent(research=JobOutput(block="x"), triage=JobOutput(block="y"))
     _run(ready, agent)
     assert all("read it first" in call.skill for call in agent.calls)
+
+
+# --- what a run cost ------------------------------------------------------
+
+
+def test_usage_is_read_from_the_sdks_dict_not_with_getattr() -> None:
+    """The SDK's `usage` is a dict. It was read with getattr, which returns the
+    default for every key, so every run reported zero tokens."""
+    from tiro.agent import Usage
+
+    raw = {"input_tokens": 1200, "output_tokens": 340,
+           "cache_read_input_tokens": 8000, "cache_creation_input_tokens": 50}
+    u = Usage.from_sdk(raw)
+    assert (u.input_tokens, u.output_tokens) == (1200, 340)
+    assert (u.cache_read_tokens, u.cache_write_tokens) == (8000, 50)
+    assert u.total_tokens == 9590
+    assert Usage.from_sdk(None).total_tokens == 0
+    assert Usage.from_sdk({}).cost_usd is None
+
+
+def test_an_unreported_cost_is_not_reported_as_free() -> None:
+    """On a subscription the SDK often gives no dollar figure. Calling that
+    $0.00 is how a budget goes unnoticed."""
+    from tiro.agent import Usage
+    from tiro.journal import spend
+
+    assert "cost not reported" in spend(Usage(output_tokens=10))
+    assert "$0.40" in spend(Usage(output_tokens=10, cost_usd=0.4))
+    assert spend(Usage()) == "No model time."
+
+
+def test_a_runs_usage_is_the_sum_of_its_jobs(ready, vault: Path) -> None:
+    """The run record's totals were fields nobody ever assigned."""
+    from tiro.agent import Usage
+
+    record = _run(ready, _agent(
+        research=JobOutput(block="x", detail="d",
+                           usage=Usage(input_tokens=100, output_tokens=20, cost_usd=0.05)),
+        triage=JobOutput(block="y", detail="d",
+                         usage=Usage(input_tokens=10, output_tokens=5, cost_usd=0.01)),
+    ))
+
+    jobs = len(record.entries)
+    assert jobs >= 2
+    assert record.usage.total_tokens == sum(e.usage.total_tokens for e in record.entries)
+    assert record.usage.total_tokens > 0
+    assert record.usage.cost_usd == pytest.approx(
+        sum(e.usage.cost_usd or 0 for e in record.entries))
+
+    import json
+    saved = json.loads((vault / ".tiro/runs" / record.run_id / "run.json").read_text())
+    # The numbers the user complained about, now written per job and per run.
+    assert saved["usage"]["output_tokens"] == record.usage.output_tokens > 0
+    assert saved["usage"]["cost_usd"] == pytest.approx(record.usage.cost_usd)
+    assert saved["entries"][0]["usage"]["input_tokens"] > 0
+    assert "tokens" not in saved  # the old always-zero fields are gone
+    assert "cost_usd" not in saved
+
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "tokens" in journal and "$" in journal
