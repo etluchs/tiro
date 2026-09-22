@@ -20,6 +20,7 @@ from tiro import gate, journal, protocol
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
 from tiro.jira import Acli, JiraError, build_payload, note_label
+from tiro.links import Index
 from tiro.ops import OpsUnavailable, VaultOps
 from tiro.scan import Job, iter_notes, scan
 from tiro.vcs import Git, LockBusy, run_lock
@@ -140,6 +141,7 @@ def apply_output(
     ops: VaultOps,
     baseline_mtime: float,
     created_dirs: list[Path] | None = None,
+    rewritten: set[str] | None = None,
 ) -> tuple[list[str], tuple[str, str] | None]:
     """Serialise the agent's result into the note. Returns (declared, moved).
 
@@ -184,6 +186,7 @@ def apply_output(
     declared = [job.rel]
     moved: tuple[str, str] | None = None
     created_dirs = [] if created_dirs is None else created_dirs
+    rewritten = set() if rewritten is None else rewritten
 
     if job.verb == "file":
         # The destination is the one the user accepted: the `tiro/filed-to`
@@ -222,6 +225,13 @@ def apply_output(
         # structure grows its folders one filing at a time. But an empty folder
         # is visible in Obsidian, so one we made for a move that then failed is
         # taken away again — only one we made, and only while it is empty.
+        # Which notes point at this one, worked out *before* the move, because
+        # afterwards there is nothing left to point at. Obsidian rewrites each
+        # of them as part of the move, so they are paths this job touches and
+        # must declare. Computed with our own resolver rather than asked of the
+        # backend: it is the same resolver the gate compares links with, and it
+        # does not depend on a CLI command that has never run.
+        relinked = sorted(Index(config.vault).backlinks(job.rel))
         made = _mkdirs(config.vault, (config.vault / destination).parent)
         try:
             ops.move(job.rel, destination)
@@ -233,6 +243,8 @@ def apply_output(
             _rmdirs(made)
             raise
         declared.append(destination)
+        declared.extend(relinked)
+        rewritten.update(relinked)
         moved = (job.rel, destination)
         created_dirs.extend(made)
 
@@ -402,11 +414,12 @@ def _execute(
     )
 
     created_dirs: list[Path] = []
+    rewritten: set[str] = set()
     try:
         output = agent.run(request)
         declared, moved = apply_output(
             config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime,
-            created_dirs=created_dirs,
+            created_dirs=created_dirs, rewritten=rewritten,
         )
     except _NoteMovedUnderUs:
         git.restore([job.rel])
@@ -420,10 +433,13 @@ def _execute(
     result = gate.check(
         config, git, ops,
         verb=job.verb, note_rel=job.rel, declared=declared,
-        before=before, moved=moved,
+        before=before, moved=moved, rewritten=rewritten,
     )
     if not result.ok:
-        gate.rollback(git, declared, created=[moved[1]] if moved else [])
+        # Everything the job touched, not only what it declared: an undeclared
+        # change is exactly the case where leaving it in place does damage.
+        gate.rollback(git, declared + result.changed,
+                      created=[moved[1]] if moved else [])
         _rmdirs(created_dirs)
         _block_note(config, job, "; ".join(result.failures), run_id)
         _commit_block(git, job, run_id)

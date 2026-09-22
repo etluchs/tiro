@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **149 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **151 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -52,9 +52,16 @@ the `.asar` inside `~/Library/Application Support/obsidian/` but never the
 `.app` in `/Applications`, so "check for updates" can report you are current
 while the binary carrying the CLI is a year old.
 
-`move` and `backlinks` are the two commands still never run. `move` is what
-`file` needs, and it is the one operation that can quietly maim the link graph,
-so it should be exercised once by hand before a timer ever reaches it.
+`move` ran for the first time on 2026-09-22 and filed a note correctly. It had
+no inbound links, though, so it did not exercise the part that matters: when
+Obsidian moves a linked note it rewrites the link in every note that pointed at
+it, and those notes are not in the job's declared paths. That is now handled —
+the backlinks are computed before the move, declared, and judged at the move's
+permission rather than the write rule's, since a link rewrite is a consequence
+of a move the user authorised rather than Tiro editing someone's prose. And a
+gate failure now rolls back everything the job touched, not only what it
+declared, because an undeclared change is exactly the case where leaving it in
+place does damage. `backlinks` is the one adapter command still never run.
 
 One limitation worth knowing: the CLI's `unresolved` JSON names the broken
 target but not the note holding it, so on that backend `lint` cannot say where

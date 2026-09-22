@@ -154,6 +154,7 @@ def check(
     declared: list[str],
     before: Snapshot,
     moved: tuple[str, str] | None = None,
+    rewritten: set[str] | None = None,
 ) -> GateResult:
     """Validate everything the job touched. Every failure is collected, not just
     the first: a job that broke three rules should say so once."""
@@ -161,6 +162,13 @@ def check(
     required = REQUIRED_TRUST.get(verb, "L4")
     declared_set = {as_vault_path(d) for d in declared}
     move_src, move_dst = moved if moved else ("", "")
+    # Notes whose inbound links Obsidian rewrote as part of this move. They
+    # changed, and they were declared, but the level they are judged at is the
+    # move's, not the write rule's: a link rewrite is a consequence of a move
+    # the user authorised, not Tiro editing somebody's prose. Judging them as
+    # writes would make filing any linked note out of an L1 folder impossible,
+    # which is most notes worth filing.
+    relinked = {as_vault_path(p) for p in (rewritten or set())}
 
     if moved and verb not in MAY_MOVE:
         result.fail(f"`{verb}` moved a note; only `file` may do that")
@@ -190,7 +198,7 @@ def check(
     for path in changed:
         if path not in declared_set:
             result.fail(f"changed an undeclared path: {path}")
-        if path in (move_src, move_dst):
+        if path in (move_src, move_dst) or path in relinked:
             continue  # judged by the move rules above, not by the write rule
         # The tagged note itself is judged with its tag counted as consent;
         # any other path the job touched is judged by its folder alone.

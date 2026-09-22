@@ -569,3 +569,88 @@ def test_a_failed_push_is_reported_in_the_journal(ready, vault: Path) -> None:
     journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
     assert "could not push" in journal
     assert "Could not read from remote repository" in journal
+
+
+# --- what Obsidian does to *other* notes when it moves one ---------------
+
+
+class _RewritingOps(FilesystemOps):
+    """Obsidian's move, as far as the rest of the vault can tell: the note
+    moves, and every note that linked to it has its link rewritten."""
+
+    def move(self, src_rel: str, dst_rel: str) -> None:
+        old, new = Path(src_rel).stem, dst_rel[:-3]
+        (self.vault / dst_rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.vault / src_rel).rename(self.vault / dst_rel)
+        for path in self.vault.rglob("*.md"):
+            if path == self.vault / dst_rel:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if f"[[{old}]]" in text:
+                path.write_text(text.replace(f"[[{old}]]", f"[[{new}]]"), encoding="utf-8")
+
+
+def _linked_pair(vault: Path, destination: str) -> str:
+    """A note with a single inbound link and no outgoing ones, so the only
+    thing in play is Obsidian rewriting somebody else's file."""
+    src = "Areas/target.md"
+    (vault / src).write_text(
+        f"---\ntiro: file\ntiro/filed-to: {destination}\n---\n\nthe note being filed\n",
+        encoding="utf-8")
+    (vault / "Areas/pointer.md").write_text("points at [[target]]\n", encoding="utf-8")
+    Git(vault)("add", "-A")
+    Git(vault)("commit", "-qm", "a linked note")
+    return src
+
+
+def test_filing_a_linked_note_survives_obsidians_link_rewrites(ready, vault: Path) -> None:
+    """Obsidian rewrites the link in Areas/pointer.md, a file the job never
+    declared. That is part of the move, not a stray edit."""
+    dst = "Tiro/target.md"
+    src = _linked_pair(vault, dst)
+    _age(vault)
+
+    record = runner.once(ready, agent=_agent(
+        file=JobOutput(keys={"tiro/filed-to": dst}, block="x", detail="filed"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y")),
+        ops=_RewritingOps(vault))
+
+    entry = next(e for e in record.entries if e.note == src)
+    assert entry.outcome == "done", entry.detail
+    assert (vault / dst).exists() and not (vault / src).exists()
+    # The rewrite went in with the move, in the same commit, and Areas/ is L1 —
+    # a link rewrite is not a write the write-trust rule should judge.
+    assert "[[Tiro/target]]" in (vault / "Areas/pointer.md").read_text()
+    # Nothing left uncommitted but Tiro's own run state, which the vault's
+    # .gitignore covers in a real vault and the fixture has none of.
+    assert [p for p in Git(vault).dirty_paths() if not p.startswith(".tiro/")] == []
+
+
+def test_a_failed_move_puts_the_rewritten_links_back_too(ready, vault: Path) -> None:
+    """If the gate refuses after the move, every file the job touched goes
+    back — not only the ones it declared. Otherwise the note returns and the
+    rewritten links point at where it is not."""
+    dst = "Tiro/target.md"
+    src = _linked_pair(vault, dst)
+    pointer = vault / "Areas/pointer.md"
+    before = pointer.read_text()
+    _age(vault)
+
+    class Saboteur(_RewritingOps):
+        """Moves, rewrites, and also scribbles on a note nobody declared."""
+
+        def move(self, src_rel: str, dst_rel: str) -> None:
+            super().move(src_rel, dst_rel)
+            (self.vault / "Areas/orphan.md").write_text("clobbered\n", encoding="utf-8")
+
+    record = runner.once(ready, agent=_agent(
+        file=JobOutput(keys={"tiro/filed-to": dst}, block="x"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y")),
+        ops=Saboteur(vault))
+
+    entry = next(e for e in record.entries if e.note == src)
+    assert entry.outcome == "blocked"
+    assert "orphan" in entry.detail
+    assert pointer.read_text() == before          # the rewrite is undone
+    assert "clobbered" not in (vault / "Areas/orphan.md").read_text()
+    assert (vault / src).exists() and not (vault / dst).exists()
