@@ -264,7 +264,13 @@ def write(config: Config, report: Report) -> Path:
         lines.append("")
         for finding in findings[:WORST]:
             detail = f" — {finding.detail}" if finding.detail else ""
-            lines.append(f"- [[{_link(finding.note)}]]{detail}")
+            # A finding with no note is one the backend could not place: the
+            # Obsidian CLI names a broken target without saying which note
+            # holds it. An empty wikilink would be worse than saying so.
+            if finding.note:
+                lines.append(f"- [[{_link(finding.note)}]]{detail}")
+            else:
+                lines.append(f"-{detail} — note not reported by this backend")
         if len(findings) > WORST:
             lines.append(f"- …and {len(findings) - WORST} more")
         lines.append("")

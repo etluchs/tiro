@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **146 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **149 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -35,21 +35,30 @@ correcting one is a one-line edit. **`tiro doctor` exercises them all and
 reports exactly which failed**, so confirming the surface is one command rather
 than one failed job at a time.
 
-**Confirmed 2026-09-22, and the news is bad.** `acli` answers: auth and search
-both work. The Obsidian CLI answers `version` but **not its query commands** —
-this installer prints "Your Obsidian installer is out of date" to stdout, exit
-code 0, no JSON. The adapter counted that as success, so every query returned
-nothing and the gate's link-integrity rule became a no-op: no broken links
-before a job, none after, nothing ever fails. `tiro doctor` now reports it, the
-adapter refuses JSON that is not JSON, and `auto` verifies with a real query
-before choosing the CLI backend. Until the installer is updated the filesystem
-backend runs, `lint` says its numbers are an approximation, and `file` refuses.
+**Confirmed against a live Obsidian and acli, 2026-09-22.** `tiro doctor`
+answers on everything it exercises. Getting there found two real faults:
 
-One known gap waits on that confirmation: when Obsidian moves a note it
-rewrites the inbound links in *other* notes, and the gate will see those as
-undeclared changed paths and fail the job. The fix is to declare, or to accept
-link-only rewrites in files that link to the moved note; which one depends on
-what `obsidian move` actually does, so it is not written yet.
+1. The adapter's success test was "stdout non-empty, stderr empty". An old
+   installer satisfies that by printing "Your Obsidian installer is out of
+   date" and no data, so every query looked fine and returned nothing — which
+   made the gate's link-integrity rule a no-op. Obsidian's chatter (startup log
+   line, update banner) is now stripped before the answer is judged.
+2. `format=json` is a request, not a contract: `unresolved` honours it,
+   `orphans` and `deadends` ignore it and print one path per line. Both shapes
+   are accepted.
+
+Note the installer and the app package update separately. Obsidian auto-updates
+the `.asar` inside `~/Library/Application Support/obsidian/` but never the
+`.app` in `/Applications`, so "check for updates" can report you are current
+while the binary carrying the CLI is a year old.
+
+`move` and `backlinks` are the two commands still never run. `move` is what
+`file` needs, and it is the one operation that can quietly maim the link graph,
+so it should be exercised once by hand before a timer ever reaches it.
+
+One limitation worth knowing: the CLI's `unresolved` JSON names the broken
+target but not the note holding it, so on that backend `lint` cannot say where
+a broken link lives. The filesystem backend can, and gives a line number.
 
 ## Not built
 

@@ -1,22 +1,31 @@
 """Obsidian CLI backend.
 
-UNVERIFIED AGAINST A LIVE OBSIDIAN. Every command string below is written from
-the published reference (https://obsidian.md/help/cli) and has not been run
-against the real thing, because the machine this was built on has no Obsidian.
-``tiro doctor`` exercises each one and reports exactly which call failed, so
-confirming the surface is one command rather than an afternoon.
+Verified against Obsidian installer 1.13.x on 2026-09-22: ``unresolved``,
+``orphans`` and ``deadends`` all answer. ``move`` and ``backlinks`` have still
+never been run. ``tiro doctor`` exercises the queries and reports which failed.
 
-Two rules from the design apply to every call here (DESIGN section 3.4):
+Three rules from the design apply to every call here (DESIGN section 3.4), plus
+one the real CLI taught us:
 
 * **Exit codes are always 0**, even on failure — so never branch on returncode
   alone; parse the output, and verify the effect afterwards.
 * **About a second per command**, with no batching — so use the vault-wide
   queries, never a per-note loop.
+* **Obsidian writes chatter to stdout**: a startup log line, and on an old
+  installer a banner telling you to update. It is not the answer, and it used
+  to be mistaken for one.
+* **`format=json` is a request, not a contract.** ``unresolved`` honours it;
+  ``orphans`` and ``deadends`` ignore it and print one path per line. Both
+  shapes are accepted. And the JSON ``unresolved`` returns names the broken
+  *target* but not the note it was found in, so ``BrokenLink.note`` is empty
+  on this backend — enough for the gate, which compares sets of targets before
+  and after, and less than the filesystem backend gives lint.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -96,25 +105,27 @@ class ObsidianCliOps:
             parsed = None
         # The exit code is not evidence. Output that parses, or output that is
         # plainly not an error, is.
-        wants_json = any(part == "format=json" for part in args)
-        if not out.strip() and not err.strip():
-            # An empty result is a legitimate answer: no orphans, say.
-            ok = True
-        elif wants_json:
-            # We asked for JSON, so JSON is the only evidence of success.
-            #
-            # This used to accept "stdout is non-empty and stderr is empty",
-            # which an older Obsidian installer satisfies by printing
-            #   Your Obsidian installer is out of date … better CLI support
-            # to stdout and no JSON at all. Every query then looked like it
-            # succeeded and returned nothing, which made the gate's
-            # link-integrity rule a silent no-op: no broken links before, none
-            # after, nothing ever fails. A check that cannot fail is worse than
-            # one that is absent, because it is counted on.
-            ok = parsed is not None
+        # Strip the chatter Obsidian writes to stdout — a startup log line, or
+        # the out-of-date-installer banner — before judging the answer.
+        #
+        # Success used to mean "stdout non-empty, stderr empty", which the
+        # banner satisfies while carrying no data. Every query then looked
+        # fine and returned nothing, and the gate's link-integrity rule became
+        # a silent no-op: no broken links before a job, none after, nothing
+        # ever fails. A check that cannot fail is worse than one that is
+        # absent, because it is counted on.
+        #
+        # Insisting on JSON instead was too strict the other way: `orphans`
+        # and `deadends` ignore `format=json` and answer with one path per
+        # line, which is a perfectly good answer. So the test is "is there
+        # anything left once the chatter is gone", and JSON is preferred when
+        # it parses.
+        data = _without_chatter(out)
+        if not data and not err.strip():
+            ok = True  # an empty result is a legitimate answer: no orphans
         else:
-            ok = bool(out.strip()) and not err.strip()
-        return CliResult(ok, out, err, parsed)
+            ok = parsed is not None or (bool(data) and not err.strip())
+        return CliResult(ok, data or out, err, parsed)
 
     def _list_of_notes(self, command: str) -> list[str]:
         res = self.run(command)
@@ -176,6 +187,24 @@ class ObsidianCliOps:
             )
         if (self.vault / src_rel).exists():
             raise OpsUnavailable(f"obsidian move left {src_rel} in place")
+
+
+#: Lines Obsidian prints to stdout that are not the answer: its startup log
+#: (leading ISO timestamp) and the banner an old installer shows.
+_CHATTER = re.compile(
+    r"^(?:\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\b.*|Your Obsidian installer .*|.*"
+    r"download the latest installer.*)$"
+)
+
+
+def _without_chatter(out: str) -> str:
+    """``out`` with Obsidian's log and banner lines removed.
+
+    Returns "" when nothing but chatter was printed, which is how a command
+    that answered nothing is told from one that answered a banner.
+    """
+    kept = [line for line in out.splitlines() if line.strip() and not _CHATTER.match(line.strip())]
+    return "\n".join(kept).strip()
 
 
 def _paths(payload: object) -> list[str]:

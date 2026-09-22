@@ -234,7 +234,10 @@ def check(
     ops.refresh()
     after = _broken_set(ops.unresolved())
     for note_path, target in sorted(after - before.broken):
-        result.fail(f"broke a link: [[{target}]] in {note_path}")
+        # The Obsidian backend reports the broken target without the note it
+        # sits in, so say so rather than printing "in " and a blank.
+        where = f" in {note_path}" if note_path else " (somewhere in the vault)"
+        result.fail(f"broke a link: [[{target}]]{where}")
 
     return result
 

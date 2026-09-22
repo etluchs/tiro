@@ -403,3 +403,40 @@ def test_status_does_not_probe_a_sleeping_obsidian(config, vault: Path, capsys, 
     out = capsys.readouterr().out
     assert "probing would launch it" in out
     assert "`file` is refused" in out
+
+
+def test_obsidian_chatter_is_not_an_answer(vault: Path) -> None:
+    """Obsidian prints a startup log line, and an old installer prints a
+    banner telling you to update. Neither is data, and the banner used to
+    count as success — which silently disabled the gate's link check."""
+    from tiro.ops_cli import _without_chatter
+
+    log = "2026-09-22 17:22:57 Loading updated app package /Users/x/obsidian-1.13.7.asar"
+    banner = "Your Obsidian installer is out of date. Please download the latest installer"
+    assert _without_chatter(f"{log}\n{banner}") == ""
+    assert _without_chatter(log) == ""
+    # A real answer survives, even when preceded by chatter.
+    assert _without_chatter(f"{log}\nArchitektur Colloquium.md\nGarmin Maps.md") == (
+        "Architektur Colloquium.md\nGarmin Maps.md")
+    assert _without_chatter("") == ""
+
+
+def test_plain_text_lists_are_a_valid_answer(vault: Path) -> None:
+    """`orphans` and `deadends` ignore format=json and print one path per
+    line. Demanding JSON rejected a perfectly good answer."""
+    from tiro.ops_cli import _paths, _without_chatter
+
+    log = "2026-09-22 17:22:57 Loading updated app package /x.asar"
+    answer = _without_chatter(f"{log}\na.md\nb.md")
+    assert sorted(_paths(answer)) == ["a.md", "b.md"]
+
+
+def test_a_broken_link_with_no_named_note_reads_sensibly(config, vault: Path) -> None:
+    """The Obsidian backend names the broken target but not the note holding
+    it. An empty wikilink would be worse than saying so."""
+    report = _report(config)
+    report.broken_links = [lint.Finding("broken link", "", "[[missing]]")]
+    lint.write(config, report)
+    text = (vault / "Tiro/Health.md").read_text()
+    assert "[[]]" not in text
+    assert "note not reported by this backend" in text
