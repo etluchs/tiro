@@ -69,8 +69,18 @@ a broken link lives. The filesystem backend can, and gives a line number.
 
 ## Not built
 
-`tiro chat`, `watch` mode, `reflect`, `index`, `connect`, and `tiro accept`
-for rule proposals.
+`tiro chat`, `watch` mode, `reflect`, `index`, `connect`, `tiro accept` and
+`tiro reject`. Planned in [docs/ITERATION-2.md](docs/ITERATION-2.md).
+
+**One gap is urgent rather than planned.** ITERATION-1 says the correction log
+is written from day one, because `reflect` needs it and the data cannot be
+recovered retroactively. It was never implemented — there is no `corrections`
+in `src/` and no `.tiro/corrections.jsonl` in the vault. Every day it stays
+open is a day of evidence lost.
+
+Three jobs have never been run even once: `distill`, `spec`, and `dispatch`
+against a live Jira. Until `dispatch` runs, iteration 1's acceptance
+criterion 7 cannot be judged.
 
 ## First run
 
