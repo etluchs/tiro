@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **123 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **131 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -12,7 +12,7 @@ PyYAML and pytest.
 | **The protocol** | frontmatter as text (never a YAML round-trip), Tiro-owned blocks, the user-content hash. 24 tests, including the invariant everything rests on: Tiro's own output cannot change the hash |
 | **The chassis** | lock → rebase → scan → plan → per-job [run → apply → gate → commit] → journal → push |
 | **The gate** | every hostile diff it exists to stop, applied directly to a working tree and refused: deletion, undeclared paths, trust violations, broken links, corrupted frontmatter, unauthorised moves |
-| **The agent layer** | read-only on the vault, structured result, swappable for a scripted stand-in — which is how the whole loop is tested without a model |
+| **The agent layer** | read-only on the vault, structured result, swappable for a scripted stand-in — which is how the whole loop is tested without a model. The tool surface is two lists in `agent.py` and is asserted by `test_agent.py`: no `Bash`, no write tools, no settings file read |
 | **Six skills** | triage, file, research, distill, spec, dispatch |
 | **lint** | broken links, orphans, protocol problems, duplicates, stale inbox, stuck notes, leftovers, requests Tiro could not read, with a trend column. Daily notes are a class of their own and never count as orphans or leftovers |
 | **dispatch** | payload validation, preview mode, idempotency by frontmatter then JQL label, and the crash window tested by killing the process between create and write-back |
@@ -96,6 +96,10 @@ These were made while building and are not in the design doc:
 8. **`file` goes where the note says.** The destination is the `tiro/filed-to`
    that was on the note when the user wrote `tiro: file`; the skill may confirm
    it, and a different answer blocks the job.
+9. **`.claude/settings.json` is not Tiro's policy.** It configures Claude Code
+   sessions a human opens in this repo. Tiro reads no settings file at all, and
+   its tool surface lives in `agent.py` (DESIGN §3.6). The docs used to conflate
+   the two, which made the deny list there look load-bearing when it is not.
 
 ## What the real vault taught
 

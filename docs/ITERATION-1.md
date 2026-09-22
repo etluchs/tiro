@@ -44,12 +44,13 @@ retroactively.
   `pydantic`, `pytest`), `bin/tiro`, `tiro.toml` loader, `--dry-run` everywhere.
 - `CLAUDE.md` (constitution), `rules/safety.md`, `rules/protocol.md`,
   `rules/output.md`.
-- `.claude/settings.json` with the tool allowlist.
 - `runner/ops.py`: the vault-ops interface and its capability probe
   (`obsidian version`, with a timeout — it launches the app if it is not running,
   so the probe must not be the thing that does that unexpectedly).
-- The tool allowlist, with `Bash(git *)`, `Bash(obsidian *)` and `Bash(acli *)`
-  explicitly denied: all three are the runner's, not the agent's.
+- The agent's tool surface, in `agent.py` and nowhere else: `Bash` denied
+  outright, so `git`, `obsidian` and `acli` are all unreachable — they are the
+  runner's, not the agent's — and no settings file read, so neither the vault
+  nor this repo can widen it.
 - **Done when:** `tiro status` prints the resolved vault path, git state, trust
   table, **which ops backend it detected**, whether `acli` is installed and
   authenticated, and the job queue it *would* run — and touches nothing.
@@ -154,7 +155,8 @@ that makes each step verifiable before the next one can hurt:
   duplicates; a note with `tiro/jira` already set is a no-op; a spec that has not
   been signed off is refused; a payload naming a project other than
   `dispatch.project` is rejected before `acli` is invoked; and `acli` is denied
-  to the agent, asserted by a test that the allowlist rejects `Bash(acli *)`.
+  to the agent, asserted by `tests/test_agent.py` — which asserts the stronger
+  thing, that the agent holds no command-running tool at all.
 
 ### M7 — Unattended for a week (ongoing)
 systemd timer every 15 min. Daily: read the journal, check for stuck notes, tune
@@ -220,7 +222,7 @@ M2 is the part that makes everything else safe.
 | The user edits a note mid-run | Skip-if-recent + mtime recheck + atomic write (§5.3) |
 | Obsidian Git plugin and Tiro fight over the remote | One syncer: rebase at run start, abort on conflict, never merge prose |
 | Cost runs away on a busy inbox | Per-run and per-day ceilings; `research` is opt-in per note, never automatic |
-| The agent is talked into something by note content | Tool allowlist + `permission_mode="dontAsk"` + the gate. The four "never"s are enforced in code, not in the prompt |
+| The agent is talked into something by note content | The tool surface (no Bash, no Write, no settings file read) + `permission_mode="dontAsk"` + the gate. The four "never"s are enforced in code, not in the prompt |
 | Tiro and the Obsidian CLI write to the vault at the same time | The CLI runs inside the same run lock; its calls are verified against the filesystem afterwards, never trusted on their exit code |
 | The CLI probe launches Obsidian on a machine where nobody wanted it running | Probe with a timeout and treat a slow answer as absent; the probe is in `tiro status`, which the user runs deliberately, before it is in the timer |
 | `dispatch` creates a duplicate issue after a crash or a retry | Frontmatter key first, then a JQL search on the note's `tiro-<uuid>` label, then create. Write-back is its own immediate commit. Tested by killing the process in the window |

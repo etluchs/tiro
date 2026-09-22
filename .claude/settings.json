@@ -1,7 +1,6 @@
 {
   "permissions": {
     "deny": [
-      "Bash(git *)",
       "Bash(obsidian *)",
       "Bash(acli *)",
       "Bash(rm *)",

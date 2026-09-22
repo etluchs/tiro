@@ -25,6 +25,23 @@ from tiro.config import Config
 
 _JSON_FENCE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
+#: Tiro's tool surface, and the only place it is defined.
+#:
+#: This is what DESIGN section 3.3 means by "the tool allowlist". It is passed
+#: to the SDK per run; it is *not* read from a settings file, and in particular
+#: not from this repo's ``.claude/settings.json``, which configures Claude Code
+#: sessions a human opens here and has no bearing on what Tiro can do.
+#:
+#: **Bash is denied whole, not per command.** The design once described this as
+#: denying ``Bash(git *)``, ``Bash(obsidian *)`` and ``Bash(acli *)`` — the three
+#: vendor tools that are the runner's and not the agent's. Denying the tool
+#: itself is the stronger property and the easier one to verify: there is no
+#: pattern to slip past with an absolute path, an alias, or a shell that spawns
+#: another. The runner still calls all three; the agent simply has no way to run
+#: a command at all.
+ALLOWED_TOOLS = ("Read", "Glob", "Grep", "WebSearch", "WebFetch")
+DENIED_TOOLS = ("Write", "Edit", "NotebookEdit", "Bash")
+
 
 class AgentError(Exception):
     """The agent could not be run, or did not answer in the required shape."""
@@ -123,12 +140,33 @@ class ScriptedAgent:
         return result
 
 
+def agent_options(request: JobRequest, *, root: Path) -> dict:
+    """Every option the SDK run is given, as a plain dict.
+
+    Separated from the SDK call so the safety-relevant half can be asserted in a
+    test without the SDK installed and without spending a token. ``test_agent.py``
+    is that test, and it is the one ITERATION-1 M6 asks for.
+    """
+    return {
+        "model": request.model,
+        "cwd": str(request.vault),
+        "allowed_tools": list(ALLOWED_TOOLS),
+        "disallowed_tools": list(DENIED_TOOLS),
+        # There is nobody to prompt on a timer, so anything not pre-approved is
+        # refused rather than asked about.
+        "permission_mode": "dontAsk",
+        # No settings file is read at all: not the vault's, so a note cannot
+        # widen the tool surface, and not this repo's.
+        "setting_sources": [],
+        "max_turns": request.max_turns,
+        "system_prompt": {"type": "file", "path": str(root / "CLAUDE.md")},
+    }
+
+
 class ClaudeAgentRunner:
     """The real thing, on the Claude Agent SDK.
 
-    Read-only tools only. ``permission_mode="dontAsk"`` because there is nobody
-    to ask, and ``setting_sources=[]`` so nothing inside the vault can widen the
-    tool surface.
+    Read-only tools only, from ``agent_options`` above.
     """
 
     name = "claude-agent-sdk"
@@ -149,16 +187,7 @@ class ClaudeAgentRunner:
                 "claude-agent-sdk is not installed; pip install 'tiro[agent]'"
             ) from exc
 
-        options = ClaudeAgentOptions(
-            model=request.model,
-            cwd=str(request.vault),
-            allowed_tools=["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
-            disallowed_tools=["Write", "Edit", "NotebookEdit", "Bash"],
-            permission_mode="dontAsk",
-            setting_sources=[],
-            max_turns=request.max_turns,
-            system_prompt={"type": "file", "path": str(self.config.root / "CLAUDE.md")},
-        )
+        options = ClaudeAgentOptions(**agent_options(request, root=self.config.root))
         chunks: list[str] = []
         cost = 0.0
         tokens = 0
