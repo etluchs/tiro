@@ -272,3 +272,54 @@ def test_undo_reports_when_there_is_nothing_to_undo(config, vault: Path, capsys)
     code = cli.main(["--root", str(config.root), "--vault", str(vault), "undo", "nonexistent-run"])
     assert code == 1
     assert "no commits" in capsys.readouterr().out
+
+
+def test_a_skipped_note_is_reported_rather_than_called_nothing(config, vault: Path, capsys) -> None:
+    """The run that prompted this said "nothing to do" while the journal
+    recorded a skip. Silence about a note passed over is the failure rule 4 of
+    the constitution names."""
+    from tiro import runner
+    from tiro.agent import JobOutput, ScriptedAgent
+
+    # Every note is freshly written by the fixture, so the "user may be typing"
+    # guard fires on all of them and no job runs.
+    record = runner.once(config, agent=ScriptedAgent({"research": JobOutput(block="x")}),
+                         ops=FilesystemOps(vault))
+    assert record.entries == []
+    assert record.skipped
+
+    cli.cmd_once(_args(config, vault))
+    out = capsys.readouterr().out
+    assert "nothing to do" not in out
+    assert "user may be typing" in out
+    assert "bitter-lesson" in out
+
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "nothing to do" not in journal
+    assert "user may be typing" in journal
+
+
+def test_a_genuinely_quiet_run_still_says_so(config, vault: Path, capsys) -> None:
+    _age(vault)
+    from tiro import protocol, runner
+    from tiro.agent import JobOutput, ScriptedAgent
+
+    # Hash every tagged note so there is truly nothing to do.
+    for path in vault.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        if protocol.verb(text):
+            path.write_text(protocol.set_key(text, "tiro/hash", protocol.user_hash(text)),
+                            encoding="utf-8")
+    _age(vault)
+
+    record = runner.once(config, agent=ScriptedAgent({}), ops=FilesystemOps(vault))
+    assert record.entries == [] and record.skipped == []
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "nothing to do" in journal
+
+
+def _args(config, vault: Path):
+    import argparse
+
+    return argparse.Namespace(root=str(config.root), vault=str(vault),
+                              backend="fs", dry_run=False)

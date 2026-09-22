@@ -72,7 +72,7 @@ def write_journal(config: Config, record: RunRecord) -> Path:
     lines.append(f"Backend: `{record.ops_backend}`. "
                  f"{len(record.entries)} job(s), {len(record.skipped)} skipped.")
     lines.append("")
-    if not record.entries:
+    if not (record.entries or record.skipped or record.notes):
         lines.append("- nothing to do")
     for entry in record.entries:
         mark = {"done": "✓", "blocked": "✗", "needs-input": "?", "preview": "·"}.get(entry.outcome, "·")

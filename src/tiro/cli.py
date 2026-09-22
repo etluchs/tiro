@@ -107,9 +107,14 @@ def cmd_once(args: argparse.Namespace) -> int:
     for entry in record.entries:
         print(f"{entry.outcome:<11} {entry.verb:<9} {entry.note}"
               + (f"  — {entry.detail}" if entry.detail else ""))
+    # A note passed over is not nothing happening. Saying "nothing to do" while
+    # the journal records a skip is the silence rule 4 forbids, and it costs the
+    # user a confused minute wondering why their tag did not take.
+    for skip in record.skipped:
+        print(f"{'skipped':<11} {'':<9} {skip['rel']}  — {skip['why']}")
     for note in record.notes:
         print(note)
-    if not record.entries:
+    if not (record.entries or record.skipped or record.notes):
         print("nothing to do")
     return 0
 
