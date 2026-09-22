@@ -27,7 +27,27 @@ STATUSES = ("queued", "working", "done", "blocked", "needs-input")
 
 FENCE = "---"
 _TIRO_KEY = re.compile(r"^(tiro(?:/[A-Za-z0-9_-]+)?)\s*:(.*)$")
-_BODY_TAG = re.compile(r"(?<![\w/#])#tiro/(" + "|".join(VERBS) + r")(?![\w/-])")
+#: ``#tiro/research`` is the documented form and is read anywhere in the body.
+#: ``#tiro research`` is what people actually type at the end of a note, and is
+#: read only when it *is* the end of a line — "#tiro file it tomorrow" is a
+#: sentence, not a request to move the note. A ``#tiro`` followed by anything
+#: else is a near-miss, and lint reports it.
+_VERB_ALT = "|".join(VERBS)
+_BODY_TAG = re.compile(r"(?<![\w/#])#tiro/(" + _VERB_ALT + r")(?![\w/-])", re.I)
+_BODY_TAG_LOOSE = re.compile(r"(?<![\w/#])#tiro[ \t]+(" + _VERB_ALT + r")[.!]?[ \t]*$", re.M | re.I)
+_BODY_TAG_ANY = re.compile(r"(?<![\w/#])#tiro(?!\w)", re.I)
+_FENCED = re.compile(r"^\s*(```|~~~).*?^\s*\1", re.M | re.S)
+_INLINE_CODE = re.compile(r"`[^`\n]*`")
+
+
+def without_code(text: str) -> str:
+    """The text with fenced blocks and inline code blanked.
+
+    A tag inside code is an example, not a request. Lint's own report says
+    "try `#tiro research`"; read literally, that line would queue lint's report
+    as a research job every run.
+    """
+    return _INLINE_CODE.sub(" ", _FENCED.sub(" ", text))
 _BLOCK_BEGIN = re.compile(r"^<!--\s*tiro:begin\s+job=(\S+)\s+id=(\S+)\s*-->\s*$")
 _BLOCK_END = re.compile(r"^<!--\s*tiro:end\s+id=(\S+)\s*-->\s*$")
 
@@ -57,7 +77,11 @@ def split_frontmatter(text: str) -> tuple[list[str], str, bool]:
 
     The fences themselves are not included. A note whose first line is not
     ``---`` has no frontmatter, which is legal and common.
+
+    A leading byte-order mark, which some Windows editors write, is not part
+    of the first line. Tiro drops it when it next writes the note.
     """
+    text = text.lstrip("﻿")
     lines = text.split("\n")
     if not lines or lines[0].strip() != FENCE:
         return [], text, False
@@ -107,7 +131,9 @@ def set_key(text: str, key: str, value: str) -> str:
     line = f"{key}: {value}"
     fm, body, present = split_frontmatter(text)
     if not present:
-        return _join([line], text if text.startswith("\n") else "\n" + text)
+        # ``body`` rather than ``text``: the same bytes, minus a byte-order
+        # mark that must not end up below the new fence.
+        return _join([line], body if body.startswith("\n") else "\n" + body)
     for i, existing in enumerate(fm):
         m = _TIRO_KEY.match(existing)
         if m and m.group(1) == key:
@@ -125,12 +151,23 @@ def remove_key(text: str, key: str) -> str:
     return _join(kept, body)
 
 
-def strip_keys(text: str) -> str:
-    """Remove every ``tiro*`` key. Used for the hash and by ``tiro strip``."""
+#: Keys the user is expected to edit, and whose edits must therefore count as
+#: an edit. The verb: changing ``tiro: triage`` to ``tiro: file`` is the accept
+#: the filing flow waits for. The destination: "the note wins" over the skill's
+#: answer, which is only true if editing it on the note is noticed. Tiro writes
+#: both too, but always *before* it records the hash, so its own writes do not
+#: loop.
+USER_KEYS = frozenset({"tiro", "tiro/filed-to"})
+
+
+def strip_keys(text: str, *, for_hash: bool = False) -> str:
+    """Remove every ``tiro*`` key. Used by ``tiro strip``, and — with
+    ``for_hash`` — for the hash, where the keys in ``USER_KEYS`` stay."""
     fm, body, present = split_frontmatter(text)
     if not present:
         return text
-    kept = [l for l in fm if not _TIRO_KEY.match(l)]
+    kept = [l for l in fm
+            if not (m := _TIRO_KEY.match(l)) or (for_hash and m.group(1) in USER_KEYS)]
     if not kept:
         # An empty frontmatter block is noise; drop the fences too.
         return body.lstrip("\n")
@@ -157,9 +194,28 @@ def verb(text: str) -> str | None:
     keys = read_keys(text)
     if "tiro" in keys and keys["tiro"]:
         return keys["tiro"]
+    body = _request_surface(text)
+    m = _BODY_TAG.search(body) or _BODY_TAG_LOOSE.search(body)
+    return m.group(1).lower() if m else None
+
+
+def _request_surface(text: str) -> str:
+    """The part of a note a body tag may be read from: the user's prose, with
+    Tiro's own blocks and any code removed. Tiro's output must never be able
+    to queue a job, and neither should an example in a code span."""
     _, body, _ = split_frontmatter(text)
-    m = _BODY_TAG.search(body)
-    return m.group(1) if m else None
+    return without_code(strip_blocks(body))
+
+
+def looks_like_request(text: str) -> bool:
+    """A ``#tiro`` tag in the body that ``verb`` did not recognise.
+
+    Silently ignoring these is how a user concludes Tiro does not work. Lint
+    names them instead.
+    """
+    if verb(text) is not None:
+        return False
+    return bool(_BODY_TAG_ANY.search(_request_surface(text)))
 
 
 def note_id(text: str) -> str | None:
@@ -244,7 +300,8 @@ def strip_blocks(text: str) -> str:
 
 
 def user_content(text: str) -> str:
-    """The note as the user wrote it: no Tiro keys, no Tiro blocks.
+    """The note as the user wrote it: no Tiro state keys, no Tiro blocks. The
+    verb and the accepted destination stay in, because the user edits them.
 
     Whitespace is normalised so that *adding or removing a Tiro block cannot
     change the result*. Without that, Tiro's own output would change the hash,
@@ -252,7 +309,7 @@ def user_content(text: str) -> str:
     terminate. The cost is that the hash is blind to the user adding a blank
     line, which is not a request for work.
     """
-    stripped = strip_blocks(strip_keys(text))
+    stripped = strip_blocks(strip_keys(text, for_hash=True))
     stripped = stripped.replace("\r\n", "\n").replace("\r", "\n")
     stripped = re.sub(r"\n{2,}", "\n\n", stripped)
     return stripped.strip()

@@ -131,6 +131,60 @@ def test_a_tag_that_merely_looks_like_ours_is_not_a_request() -> None:
     assert p.verb("body mentioning #tiro/researching and #nottiro/research\n") is None
 
 
+def test_the_loose_tag_form_people_actually_type_is_a_request() -> None:
+    """Found in the real vault: `#tiro research.` at the end of a note."""
+    assert p.verb("Marimo instead of jupyter\n\n#tiro research.\n") == "research"
+    assert p.verb("#tiro   distill\n") == "distill"
+    assert p.verb("#tiro\n") is None
+    # The loose form only at the end of a line: this is a sentence, not a
+    # request to move the note.
+    assert p.verb("#tiro file it tomorrow\n") is None
+    assert p.verb("remember to #tiro/file this\n") == "file"
+
+
+def test_changing_the_verb_changes_the_hash() -> None:
+    done = p.set_key(SIMPLE, "tiro/hash", p.user_hash(SIMPLE))
+    accepted = done.replace("tiro: research", "tiro: file")
+    assert p.needs_work(accepted)
+
+
+def test_editing_the_destination_on_the_note_is_an_edit_too() -> None:
+    """Triage writes tiro/filed-to and then records the hash, so its own write
+    does not loop; the user changing it afterwards is noticed."""
+    filed = p.set_key(SIMPLE, "tiro/filed-to", "Areas/a.md")
+    filed = p.set_key(filed, "tiro/hash", p.user_hash(filed))
+    assert not p.needs_work(filed)
+    assert p.needs_work(p.set_key(filed, "tiro/filed-to", "Areas/b.md"))
+
+
+def test_a_bare_tiro_tag_is_reported_as_a_near_miss() -> None:
+    assert p.looks_like_request("do this #tiro please\n")
+    assert p.looks_like_request("#tiro-research\n")
+    assert not p.looks_like_request("#tiro research\n")
+    assert not p.looks_like_request("nothing to see\n")
+
+
+def test_tags_are_read_regardless_of_case() -> None:
+    assert p.verb("#Tiro research\n") == "research"
+    assert p.verb("#TIRO/distill\n") == "distill"
+
+
+def test_a_tag_inside_code_or_inside_tiros_own_block_is_not_a_request() -> None:
+    assert p.verb("try `#tiro research`\n") is None
+    assert p.verb("```\n#tiro/research\n```\n") is None
+    assert p.verb("<!-- tiro:begin job=triage id=a -->\ntag #tiro file to accept\n"
+                  "<!-- tiro:end id=a -->\n") is None
+    assert not p.looks_like_request("see `#tiro` in the docs\n")
+
+
+def test_a_byte_order_mark_does_not_hide_the_frontmatter() -> None:
+    text = "﻿---\ntiro: research\n---\n\nbody\n"
+    assert p.verb(text) == "research"
+    assert p.user_hash(text) == p.user_hash(text[1:])
+    # And with no frontmatter, the mark does not end up inside the prose.
+    assert "﻿" not in p.set_key("﻿Hello\n", "tiro/id", "abc")
+
+
 # --- ids ------------------------------------------------------------------
 
 

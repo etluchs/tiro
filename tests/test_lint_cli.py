@@ -64,10 +64,98 @@ def test_lint_notices_a_note_stuck_working(config, vault: Path) -> None:
 
 
 def test_lint_notices_a_stale_inbox_note(config, vault: Path) -> None:
+    from dataclasses import replace
+
+    from tiro.config import LintConfig
+
     old = vault / "00 Inbox/forgotten.md"
     old.write_text("written and never looked at again\n", encoding="utf-8")
     os.utime(old, (0, 0))
-    assert any(f.note == "00 Inbox/forgotten.md" for f in _report(config).stale_inbox)
+    # No inbox configured: nothing is stale, because there is nowhere to be
+    # stale in. With one: the forgotten note is named.
+    assert _report(config).stale_inbox == []
+    with_inbox = replace(config, lint=LintConfig(inbox="00 Inbox/"))
+    assert any(f.note == "00 Inbox/forgotten.md" for f in _report(with_inbox).stale_inbox)
+
+
+def test_the_root_can_be_the_inbox_and_daily_notes_never_go_stale(config, vault: Path) -> None:
+    from dataclasses import replace
+
+    from tiro.config import LintConfig
+
+    for name in ("loose.md", "2026-09-01.md"):
+        p = vault / name
+        p.write_text("something\n", encoding="utf-8")
+        os.utime(p, (0, 0))
+    old_in_folder = vault / "Areas/orphan.md"
+    os.utime(old_in_folder, (0, 0))
+
+    stale = {f.note for f in _report(replace(config, lint=LintConfig(inbox="/"))).stale_inbox}
+    assert stale == {"loose.md"}
+
+
+def test_lint_lists_leftovers_and_counts_empty_daily_notes_as_one_line(config, vault: Path) -> None:
+    (vault / "Untitled.md").write_text("", encoding="utf-8")
+    (vault / "Untitled 1.canvas").write_text("{}", encoding="utf-8")
+    (vault / "stub.md").write_text("todo\n", encoding="utf-8")
+    (vault / "2026-09-20.md").write_text("", encoding="utf-8")
+    (vault / "2026-09-21.md").write_text("", encoding="utf-8")
+
+    report = _report(config)
+    kinds = {(f.kind, f.note) for f in report.leftovers}
+    assert ("empty", "Untitled.md") in kinds
+    assert ("never named", "Untitled.md") in kinds
+    assert ("never named", "Untitled 1.canvas") in kinds
+    assert ("almost empty", "stub.md") in kinds
+    assert report.empty_daily == 2
+    assert not any(f.note.startswith("2026-") for f in report.leftovers)
+
+    lint.write(config, report)
+    text = (vault / "Tiro/Health.md").read_text()
+    assert "2 empty daily note(s)" in text
+    assert "never named: [[Untitled 1.canvas]]" in text
+
+
+def test_daily_notes_are_not_orphans(config, vault: Path) -> None:
+    (vault / "2026-09-21.md").write_text("a day\n", encoding="utf-8")
+    report = _report(config)
+    assert "2026-09-21.md" not in report.orphans
+    assert "Areas/orphan.md" in report.orphans
+
+
+def test_lint_names_a_request_tiro_could_not_read(config, vault: Path) -> None:
+    (vault / "00 Inbox/almost.md").write_text("a thought\n\n#tiro pls\n", encoding="utf-8")
+    problems = {(f.kind, f.note) for f in _report(config).protocol_problems}
+    assert ("unrecognised request", "00 Inbox/almost.md") in problems
+
+
+def test_an_empty_trust_key_is_refused(vault: Path) -> None:
+    from tiro.config import ConfigError, TrustMap
+
+    (vault / ".tiro/trust.toml").write_text('default = "L1"\n"" = "L0"\n', encoding="utf-8")
+    try:
+        TrustMap.load(vault / ".tiro/trust.toml")
+    except ConfigError as exc:
+        assert '"/"' in str(exc)
+    else:
+        raise AssertionError("an empty key should be refused")
+
+    # The root key it recommends must itself load — the draft adopt writes.
+    (vault / ".tiro/trust.toml").write_text('default = "L3"\n"/" = "L4"\n"Roam/" = "L1"\n',
+                                            encoding="utf-8")
+    trust = TrustMap.load(vault / ".tiro/trust.toml")
+    assert trust.level_for("loose.md") == "L4"
+    assert trust.level_for("Roam/x.md") == "L1"
+    assert trust.level_for("uzh/x.md") == "L3"
+
+
+def test_plugin_directories_are_not_notes(config, vault: Path) -> None:
+    from tiro.scan import iter_notes
+
+    (vault / ".smart-env").mkdir()
+    (vault / ".smart-env/cache.md").write_text("[[phantom]]\n", encoding="utf-8")
+    assert not any(".smart-env" in str(p) for p in iter_notes(vault))
+    assert not any(".smart-env" in f.note for f in _report(config).broken_links)
 
 
 def test_lint_changes_nothing_but_its_own_report(config, vault: Path) -> None:

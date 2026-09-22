@@ -16,28 +16,42 @@ from tiro.config import Config, as_vault_path
 from tiro.ops import BrokenLink, VaultOps
 from tiro.vcs import Git
 
-#: The trust level each verb needs to *write* a path.
+#: The trust level each verb needs to *write* a path. Every verb here writes a
+#: block and ``tiro/*`` keys on the note and nothing else, so every verb is L2.
+#: ``spec`` and ``dispatch`` were L3 for a while, on the theory that a spec is a
+#: new note; it is not, it is a block on the note the user tagged.
 REQUIRED_TRUST = {
     "triage": "L2",
     "file": "L2",
     "research": "L2",
     "distill": "L2",
-    "spec": "L3",
-    "dispatch": "L3",
+    "spec": "L2",
+    "dispatch": "L2",
 }
 MAY_MOVE = {"file"}
+
+#: The user's tag is the consent. A note carrying ``tiro:`` is L2 for itself,
+#: whatever its folder says, unless the folder is L0 — L0 is "Tiro does not
+#: touch this", and a tag inside it is treated as a note, not a request.
+#: Without this rule the default ladder blocks every request outside a listed
+#: folder, and a vault with no structure has no folders to list.
+TAGGED_NOTE_TRUST = "L2"
 
 #: A move is two permissions, not one, and they are not the same permission.
 #:
 #: Taking a note *out of* where the user put it is the risky half — that is what
-#: breaks the graph and loses things — so the source folder must be L4. Putting
-#: a note somewhere is ordinary creation, so the destination need only be L3.
+#: breaks the graph and loses things. But every move Tiro makes today is one the
+#: user asked for by writing ``tiro: file`` on the note, and the constitution's
+#: rule is "never outside L4 *without an explicit accept*". The tag is the
+#: accept, so the source need only be somewhere Tiro may act at all: not L0.
+#: L4 keeps its meaning for moves Tiro would initiate itself, of which there
+#: are none yet.
 #:
-#: This is why the inbox is L4 in the recommended defaults: a folder whose whole
-#: purpose is that things leave it. And why filing *into* an area is opt-in per
-#: folder: an area stays L1 until the user says Tiro may put notes there, and
-#: until then `file` blocks with a message naming the folder and the level.
-MOVE_FROM_TRUST = "L4"
+#: Putting a note somewhere is ordinary creation, so the destination must be
+#: L3. Filing *into* an area is opt-in per folder: an area stays below L3 until
+#: the user says Tiro may put notes there, and until then `file` blocks with a
+#: message naming the folder and the level.
+MOVE_FROM_TRUST = "L1"
 MOVE_TO_TRUST = "L3"
 
 #: Tiro's own state directory. Not vault content: the run ledger, run records,
@@ -78,6 +92,47 @@ def _is_ours(path: str) -> bool:
     return as_vault_path(path).startswith(OURS)
 
 
+def destination_problem(config: Config, destination: str) -> str | None:
+    """Why a `file` destination is unacceptable, or None.
+
+    The destination comes from the note — written by triage from what it read,
+    which is the injection channel the constitution warns about. So it is
+    checked as a path before it is checked for trust: inside the vault, a
+    markdown note, not in a hidden directory. A note filed to ``../x.md`` has
+    left the vault, and one filed to ``Areas/x`` (no suffix) is a note the scan
+    will never see again.
+    """
+    from tiro.scan import is_hidden
+
+    rel = as_vault_path(destination)
+    if not rel or rel.endswith("/"):
+        return "no filename"
+    if not rel.endswith(".md"):
+        return "not a markdown note"
+    if ".." in Path(rel).parts or Path(destination).is_absolute() or "\\" in destination:
+        return "outside the vault"
+    try:
+        (config.vault / rel).resolve().relative_to(config.vault.resolve())
+    except ValueError:
+        return "outside the vault"
+    if is_hidden(Path(rel).parts):
+        return "in a hidden or reserved directory"
+    return None
+
+
+def note_trust(config: Config, note_rel: str) -> str:
+    """The level a tagged note is treated at: its folder's, raised to L2 by the
+    tag, unless the folder is L0."""
+    level = config.trust.level_for(note_rel)
+    if level == "L0":
+        return level
+    return max(level, TAGGED_NOTE_TRUST, key=config.trust.index)
+
+
+def note_permits(config: Config, note_rel: str, required: str) -> bool:
+    return config.trust.index(note_trust(config, note_rel)) >= config.trust.index(required)
+
+
 def snapshot(config: Config, git: Git, ops: VaultOps, note_rel: str) -> Snapshot:
     ops.refresh()
     note = config.vault / note_rel
@@ -110,6 +165,9 @@ def check(
     if moved and verb not in MAY_MOVE:
         result.fail(f"`{verb}` moved a note; only `file` may do that")
     if moved:
+        problem = destination_problem(config, move_dst)
+        if problem:
+            result.fail(f"cannot file to {move_dst}: {problem}")
         if not config.trust.permits(move_src, MOVE_FROM_TRUST):
             result.fail(
                 f"cannot move a note out of {move_src}: that folder is "
@@ -134,7 +192,11 @@ def check(
             result.fail(f"changed an undeclared path: {path}")
         if path in (move_src, move_dst):
             continue  # judged by the move rules above, not by the write rule
-        if not config.trust.permits(path, required):
+        # The tagged note itself is judged with its tag counted as consent;
+        # any other path the job touched is judged by its folder alone.
+        allowed = (note_permits(config, path, required) if path == note_rel
+                   else config.trust.permits(path, required))
+        if not allowed:
             result.fail(
                 f"{verb} needs {required} for {path}, which is "
                 f"{config.trust.level_for(path)}"

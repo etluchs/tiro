@@ -11,13 +11,14 @@ so that Obsidian rewrites every inbound link itself.
 
 1. Find the destination. Normally it is already on the note as `tiro/filed-to`,
    written by `triage`. If the user edited it, theirs wins.
-2. Sanity-check it: does the folder exist in this vault, does the filename keep
-   the note's identity, does it agree with `.tiro/rules.md`?
+2. Sanity-check it: does the filename keep the note's identity, does it agree
+   with `.tiro/rules.md` if there is one, and if the folder is new, did the
+   triage proposal say so? A new folder is fine; the runner creates it.
 3. Return it as `keys: {"tiro/filed-to": "<vault-relative path>.md"}`.
 
-If there is no destination on the note, or it names a folder that does not
-exist, return `status: needs-input` with a question. Do not invent one: this is
-the only job that changes where things live.
+If there is no destination on the note, return `status: needs-input` with a
+question. Do not invent one: this is the only job that changes where things
+live.
 
 ## The block
 

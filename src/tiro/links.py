@@ -212,5 +212,6 @@ def _aliases(text: str) -> list[str]:
 
 
 def _ignored(path: Path, vault: Path) -> bool:
-    parts = path.relative_to(vault).parts
-    return any(p in (".git", ".obsidian", ".trash", ".tiro") for p in parts)
+    from tiro.scan import is_hidden
+
+    return is_hidden(path.relative_to(vault).parts)

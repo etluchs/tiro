@@ -50,10 +50,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             ok, detail = git.can_push()
             print(f"push     {'ok' if ok else 'NO — ' + detail}")
 
-    probe = ops_mod.probe_obsidian()
-    print(f"obsidian {'ok — ' + probe.detail if probe.usable else 'unavailable — ' + probe.detail}")
-    if not probe.usable:
+    if args.backend == "fs":
+        # Not probed: `obsidian version` launches the app if it is not running,
+        # and `--backend fs` is how the user says not to.
+        print("obsidian unavailable — not probed, --backend fs")
         print("         (the filesystem backend will be used; `file` is refused)")
+    else:
+        probe = ops_mod.probe_obsidian()
+        print(f"obsidian {'ok — ' + probe.detail if probe.usable else 'unavailable — ' + probe.detail}")
+        if not probe.usable:
+            print("         (the filesystem backend will be used; `file` is refused)")
 
     acli = Acli(site=config.dispatch.site)
     if not acli.installed:
@@ -67,6 +73,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"trust    default {config.trust.default} ({TRUST_MEANING[config.trust.default]})")
     for folder, level in sorted(config.trust.folders.items()):
         print(f"         {folder:<24} {level}  {TRUST_MEANING[level]}")
+    print(f"inbox    {config.lint.inbox or '(none configured; lint skips the stale check)'}")
 
     jobs, skipped = scan.scan(config)
     print(f"\nqueue    {len(jobs)} job(s), {len(skipped)} skipped")
@@ -117,6 +124,26 @@ def cmd_lint(args: argparse.Namespace) -> int:
     if not report.authoritative:
         print("\nLink numbers are Tiro's own approximation; Obsidian was not reachable.")
     print(f"\nwritten to {path.relative_to(config.vault)}")
+    return 0
+
+
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """Survey the vault and draft its `.tiro/` files. Proposes, never imposes.
+
+    Nothing is written outside `.tiro/proposals/adopt/`, and nothing there is
+    read by Tiro until the user moves it into place.
+    """
+    from tiro import adopt
+
+    config = _config(args)
+    survey = adopt.survey(config)
+    print(adopt.render_survey(survey))
+    if args.dry_run:
+        return 0
+    written = adopt.write_proposals(config, survey)
+    print("\nproposals written, for you to read and move into place:")
+    for path in written:
+        print(f"  {path.relative_to(config.vault)}")
     return 0
 
 
@@ -223,6 +250,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("lint", help="vault health report").set_defaults(fn=cmd_lint)
     sub.add_parser("doctor", help="check the external CLIs answer").set_defaults(fn=cmd_doctor)
+
+    adopt = sub.add_parser("adopt", help="survey the vault and draft rules.md and trust.toml")
+    adopt.add_argument("--dry-run", action="store_true", help="print the survey, write nothing")
+    adopt.set_defaults(fn=cmd_adopt)
 
     undo = sub.add_parser("undo", help="revert a run")
     undo.add_argument("run_id")

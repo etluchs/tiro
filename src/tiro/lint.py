@@ -17,14 +17,20 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import re
+
 from tiro import protocol
-from tiro.config import Config
+from tiro.config import Config, in_folder
 from tiro.journal import HEADER
 from tiro.links import Index, iter_links
 from tiro.ops import BrokenLink, VaultOps
-from tiro.scan import iter_notes
+from tiro.scan import is_daily, is_hidden, iter_notes
 
 WORST = 20
+
+#: Obsidian's placeholder names, in the languages it ships. A file still called
+#: this is one the user opened and never came back to.
+UNTITLED = re.compile(r"^(Untitled|Unbenannt|Ohne Titel|Sans titre|Senza titolo)( \d+)?$")
 
 #: Tiro's own notes are not part of the vault's health. Counting them means the
 #: report measures Tiro's presence: Health.md links to every broken note it
@@ -52,6 +58,9 @@ class Report:
     duplicate_titles: list[Finding] = field(default_factory=list)
     stale_inbox: list[Finding] = field(default_factory=list)
     stuck: list[Finding] = field(default_factory=list)
+    leftovers: list[Finding] = field(default_factory=list)
+    empty_daily: int = 0
+    inbox: str = ""
 
     @property
     def counts(self) -> dict[str, int]:
@@ -63,18 +72,20 @@ class Report:
             "duplicate titles": len(self.duplicate_titles),
             "stale in the inbox": len(self.stale_inbox),
             "stuck": len(self.stuck),
+            "leftovers": len(self.leftovers) + (1 if self.empty_daily else 0),
         }
 
 
-def run(config: Config, ops: VaultOps, *, inbox: str = "00 Inbox/", stale_days: int = 30,
-        now: float | None = None) -> Report:
+def run(config: Config, ops: VaultOps, *, now: float | None = None) -> Report:
     import time
 
     now = time.time() if now is None else now
+    inbox, stale_days, tiny = config.lint.inbox, config.lint.stale_days, config.lint.tiny_bytes
     report = Report(
         backend=ops.name,
         authoritative=getattr(ops, "authoritative", False),
         when=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        inbox=inbox,
     )
 
     ops.refresh()
@@ -93,7 +104,9 @@ def run(config: Config, ops: VaultOps, *, inbox: str = "00 Inbox/", stale_days: 
         if rel.startswith(OURS):
             continue
         report.notes += 1
-        titles.setdefault(path.stem.lower(), []).append(rel)
+        daily = is_daily(rel)
+        if not daily:
+            titles.setdefault(path.stem.lower(), []).append(rel)
 
         text = path.read_text(encoding="utf-8", errors="replace")
         report.protocol_problems += _protocol_problems(rel, text)
@@ -103,7 +116,21 @@ def run(config: Config, ops: VaultOps, *, inbox: str = "00 Inbox/", stale_days: 
         if status in ("working", "blocked"):
             report.stuck.append(Finding(f"stuck: {status}", rel, keys.get("tiro/run", "")))
 
-        if rel.startswith(inbox):
+        size = path.stat().st_size
+        if size == 0 and daily:
+            # The daily-notes plugin creates one on open. Twenty-seven of them
+            # are one fact, not twenty-seven findings.
+            report.empty_daily += 1
+        elif size == 0:
+            report.leftovers.append(Finding("empty", rel))
+        elif not daily and size < tiny and not text.strip().startswith("```"):
+            report.leftovers.append(Finding("almost empty", rel, f"{size} bytes"))
+        if not daily and UNTITLED.match(path.stem):
+            report.leftovers.append(Finding("never named", rel))
+
+        # Daily notes sit where the plugin put them, whatever folder that is;
+        # they do not go stale and they are not filed.
+        if inbox and not daily and in_folder(rel, inbox):
             age_days = (now - path.stat().st_mtime) / 86400
             if age_days > stale_days:
                 report.stale_inbox.append(
@@ -114,11 +141,34 @@ def run(config: Config, ops: VaultOps, *, inbox: str = "00 Inbox/", stale_days: 
             report.duplicate_titles.append(
                 Finding("duplicate title", paths[0], ", ".join(sorted(paths)[1:])))
 
+    report.leftovers += _untitled_files(config.vault)
+    report.leftovers = sorted(report.leftovers, key=lambda f: (f.note, f.kind))
     return report
 
 
+def _untitled_files(vault: Path) -> list[Finding]:
+    """Canvases, bases and the like that were opened once and never named.
+
+    Not notes, so lint's other checks never see them; but they are the kind of
+    thing that accumulates at the root of a vault and that the user is glad to
+    have listed. Listed, only: Tiro never deletes.
+    """
+    out: list[Finding] = []
+    for path in sorted(vault.rglob("*")):
+        if not path.is_file() or path.suffix == ".md":
+            continue
+        rel_parts = path.relative_to(vault).parts
+        if is_hidden(rel_parts) or rel_parts[0] == OURS.rstrip("/"):
+            continue
+        if UNTITLED.match(path.stem):
+            out.append(Finding("never named", path.relative_to(vault).as_posix(),
+                               f"{path.stat().st_size} bytes"))
+    return out
+
+
 def _orphans(vault: Path) -> list[str]:
-    """Notes nothing links to — ignoring links from Tiro's own notes.
+    """Notes nothing links to — ignoring links from Tiro's own notes, and
+    ignoring daily notes as candidates.
 
     Computed here rather than asked of the backend, and the reason is worth
     stating: the journal and this very report link to every note Tiro touches,
@@ -126,6 +176,10 @@ def _orphans(vault: Path) -> list[str]:
     orphan list would say the same thing — correctly, and uselessly. Excluding
     ``Tiro/`` as a *source* of links keeps the number about the user's vault
     rather than about Tiro's bookkeeping.
+
+    Daily notes are excluded as *targets* for a different reason: nothing links
+    to a daily note by design, so in a vault that keeps a diary they are the
+    whole list, and the notes that are actually adrift never surface.
     """
     index = Index(vault)
     linked: set[str] = set()
@@ -139,7 +193,8 @@ def _orphans(vault: Path) -> list[str]:
                 linked.add(target)
     return sorted(
         rel for rel in index.paths
-        if rel.endswith(".md") and rel not in linked and not rel.startswith(OURS)
+        if rel.endswith(".md") and rel not in linked
+        and not rel.startswith(OURS) and not is_daily(rel)
     )
 
 
@@ -167,6 +222,10 @@ def _protocol_problems(rel: str, text: str) -> list[Finding]:
 
     if keys.get("tiro/hash") and not verb:
         out.append(Finding("orphaned state", rel, "a tiro/hash with no request"))
+
+    if protocol.looks_like_request(text):
+        out.append(Finding("unrecognised request", rel,
+                           "a `#tiro` tag with no verb Tiro knows; try `#tiro research`"))
 
     return out
 
@@ -210,11 +269,28 @@ def write(config: Config, report: Report) -> Path:
             lines.append(f"- …and {len(findings) - WORST} more")
         lines.append("")
 
+    if report.leftovers or report.empty_daily:
+        lines.append("## Leftovers")
+        lines.append("")
+        lines.append("Empty, unnamed, or too short to be a note. Tiro lists these and "
+                     "nothing more; tag one `tiro: triage` to have it proposed for "
+                     "an archive folder, or deal with it yourself.")
+        lines.append("")
+        if report.empty_daily:
+            lines.append(f"- {report.empty_daily} empty daily note(s), created on open "
+                         "and never written in")
+        for finding in report.leftovers[:WORST * 2]:
+            detail = f" — {finding.detail}" if finding.detail else ""
+            lines.append(f"- {finding.kind}: [[{_link(finding.note)}]]{detail}")
+        if len(report.leftovers) > WORST * 2:
+            lines.append(f"- …and {len(report.leftovers) - WORST * 2} more")
+        lines.append("")
+
     if report.orphans:
         lines.append("## Orphans")
         lines.append("")
         lines.append("Nothing links to these. Not a problem in itself — some notes "
-                     "are meant to stand alone.")
+                     "are meant to stand alone. Daily notes are not counted.")
         lines.append("")
         for rel in report.orphans[:WORST]:
             lines.append(f"- [[{_link(rel)}]]")

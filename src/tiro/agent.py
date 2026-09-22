@@ -62,7 +62,12 @@ class JobOutput:
             raise AgentError(f"agent returned an invalid status: {status!r}")
         keys = {}
         for key, value in (data.get("keys") or {}).items():
-            if key != "tiro" and not str(key).startswith("tiro/"):
+            if str(key) == "tiro":
+                # The verb is the user's key. An agent that could set it could
+                # queue its own next job — spec into dispatch, say — and the
+                # protocol's "only the user releases it" would be prompt-deep.
+                raise AgentError("agent tried to set `tiro`, which only the user writes")
+            if not str(key).startswith("tiro/"):
                 raise AgentError(f"agent tried to set a non-Tiro key: {key!r}")
             keys[str(key)] = str(value)
         return cls(

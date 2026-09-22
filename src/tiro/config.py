@@ -29,6 +29,28 @@ def as_vault_path(value: str | Path) -> str:
     return str(value).replace("\\", "/").lstrip("/")
 
 
+#: The one folder key that is not a prefix: ``"/"`` names the vault root itself,
+#: meaning files that sit directly in it and nothing below. A vault that keeps
+#: its daily notes and loose captures at the top level has no inbox folder to
+#: point at; this is how it points at the root instead.
+ROOT = "/"
+
+
+def in_folder(rel_path: str | Path, folder: str) -> bool:
+    """Is this path inside that folder? ``"/"`` matches root-level files only.
+
+    Matching is by path component, not by string prefix: ``Areas`` does not
+    claim ``Areas2/...``. A trailing slash on the folder is optional.
+    """
+    rel = as_vault_path(rel_path)
+    if folder == ROOT:
+        return "/" not in rel
+    prefix = as_vault_path(folder).rstrip("/")
+    if not prefix:
+        return True
+    return rel == prefix or rel.startswith(prefix + "/")
+
+
 class ConfigError(Exception):
     """Raised when configuration is missing or nonsensical. Always fatal."""
 
@@ -45,7 +67,8 @@ class TrustMap:
     """Per-folder trust ladder (DESIGN section 5.1).
 
     Lookup is longest-prefix: the most specific configured folder wins. Paths
-    are vault-relative, POSIX-style, and folders end in "/".
+    are vault-relative, POSIX-style, and folders end in "/". The key ``"/"``
+    is the vault root itself: files directly in it, not everything below.
     """
 
     default: str = "L1"
@@ -54,14 +77,20 @@ class TrustMap:
     def level_for(self, rel_path: str | Path) -> str:
         rel = as_vault_path(rel_path)
         best, best_len = self.default, -1
-        for prefix, level in self.folders.items():
-            p = as_vault_path(prefix)
-            if rel.startswith(p) and len(p) > best_len:
-                best, best_len = level, len(p)
+        for folder, level in self.folders.items():
+            if not in_folder(rel, folder):
+                continue
+            depth = 0 if folder == ROOT else len(as_vault_path(folder).rstrip("/"))
+            if depth > best_len:
+                best, best_len = level, depth
         return best
 
     def permits(self, rel_path: str | Path, required: str) -> bool:
         return _level_index(self.level_for(rel_path)) >= _level_index(required)
+
+    @staticmethod
+    def index(level: str) -> int:
+        return _level_index(level)
 
     @classmethod
     def load(cls, path: Path) -> "TrustMap":
@@ -75,6 +104,8 @@ class TrustMap:
         for key, value in raw.items():
             if not isinstance(value, str):
                 raise ConfigError(f"trust.toml: {key!r} must be a level string")
+            if key != ROOT and not as_vault_path(key).strip("/ "):
+                raise ConfigError('trust.toml: an empty folder key is ambiguous; use "/" for the root')
             _level_index(value)
             folders[key] = value
         _level_index(default)
@@ -107,6 +138,20 @@ class DispatchConfig:
 
 
 @dataclass(frozen=True)
+class LintConfig:
+    """Where lint looks for things that should have moved on.
+
+    ``inbox`` is a folder, or ``"/"`` for loose notes at the vault root. Empty
+    means the vault has no inbox, and the stale check is skipped rather than
+    pointed at a folder that does not exist.
+    """
+
+    inbox: str = ""
+    stale_days: int = 30
+    tiny_bytes: int = 50
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     """The tiro repo."""
@@ -114,6 +159,7 @@ class Config:
     run: RunConfig = field(default_factory=RunConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     dispatch: DispatchConfig = field(default_factory=DispatchConfig)
+    lint: LintConfig = field(default_factory=LintConfig)
     jobs: dict[str, dict] = field(default_factory=dict)
     trust: TrustMap = field(default_factory=TrustMap)
 
@@ -157,6 +203,7 @@ class Config:
             run=RunConfig(**raw.get("run", {})),
             agent=AgentConfig(**raw.get("agent", {})),
             dispatch=DispatchConfig(**raw.get("dispatch", {})),
+            lint=LintConfig(**raw.get("lint", {})),
             jobs=raw.get("jobs", {}),
             trust=trust,
         )

@@ -18,19 +18,31 @@ tiro/hash: 8f3c…                  # hash of the USER's content at that time
 
 Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`. Anything else
 is blocked with "unknown verb". A body tag `#tiro/research` is read as
-`tiro: research`, so Obsidian's tag pane doubles as the queue.
+`tiro: research` anywhere in the note, so Obsidian's tag pane doubles as the
+queue. The looser `#tiro research` that people actually type is read too, but
+only at the end of a line, so that "#tiro file it tomorrow" stays a sentence.
+A `#tiro` followed by anything else is not a request, and `lint` names it so
+the user finds out.
 
 Job-specific keys use the same namespace: `tiro/jira` holds a dispatched issue
 key, `tiro/id` the note's stable uuid.
+
+`tiro` itself — the verb — is the user's key. The runner refuses it from a
+skill's output, so no job can queue the next one: `spec` cannot become
+`dispatch` without the user writing the word.
 
 ## The one rule
 
 > Act on a note when `tiro:` is present **and** (`tiro/hash` is absent **or**
 > `tiro/hash` differs from the hash of the note's current user content).
 
-**User content** is the note with every `tiro/*` frontmatter key and every
-Tiro-owned block removed. Tiro's own output therefore cannot trigger Tiro. Get
-this wrong and the loop never terminates.
+**User content** is the note with Tiro's state keys and every Tiro-owned block
+removed. Two keys stay in because the user edits them: the `tiro:` verb
+(changing `triage` to `file` is the accept the filing flow waits for) and
+`tiro/filed-to` (the destination the user accepted, which they may correct).
+Tiro writes both before it records the hash, so its own output cannot trigger
+Tiro, and the user's can. Get this wrong in either direction and either the
+loop never terminates or the accept is never noticed.
 
 ## Blocks
 

@@ -61,7 +61,8 @@ def vault(tmp_path: Path) -> Path:
         p.write_text(text, encoding="utf-8")
     (root / ".tiro").mkdir(parents=True, exist_ok=True)
     (root / ".tiro" / "trust.toml").write_text(
-        'default = "L1"\n"00 Inbox/" = "L4"\n"Tiro/" = "L4"\n', encoding="utf-8"
+        'default = "L1"\n"00 Inbox/" = "L4"\n"Tiro/" = "L4"\n"Private/" = "L0"\n',
+        encoding="utf-8",
     )
     _git(root.parent, "init", "-q", "vault")
     _git(root, "config", "user.email", "tiro@example.invalid")

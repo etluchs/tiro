@@ -25,6 +25,12 @@ max_searches = 8
 # allowed_domains = []
 # blocked_domains = []
 
+[lint]
+# Where unfiled notes wait. A folder, or "/" for loose notes at the vault root.
+# Leave it out and lint skips the stale check. `tiro adopt` suggests a value.
+inbox = "/"
+stale_days = 30
+
 [dispatch]
 # Jira Cloud, posted through acli under the user's own account (DESIGN §5.5).
 site = "example.atlassian.net"

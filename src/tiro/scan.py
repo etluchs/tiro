@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,7 +10,33 @@ from pathlib import Path
 from tiro import protocol
 from tiro.config import Config
 
-IGNORED_DIRS = {".git", ".obsidian", ".trash", ".tiro", "node_modules"}
+IGNORED_DIRS = {"node_modules"}
+
+#: ``Tiro/`` is Tiro's own surface — journal, questions, health. Nothing there
+#: is a request, and the health report quotes tag syntax it must not act on.
+#: It is still part of the vault (links to it resolve, notes may be filed
+#: there), so it is skipped by the scan and not by ``is_hidden``.
+OURS = "Tiro"
+
+#: A daily note, by Obsidian's default naming. These are a class of their own:
+#: they live where the daily-notes plugin puts them, they are never filed
+#: anywhere else, and an empty one is the plugin's doing, not a leftover.
+DAILY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def is_hidden(rel_parts: tuple[str, ...]) -> bool:
+    """Any dot-directory is Obsidian's, a plugin's, or ours — never a note.
+
+    An explicit list went stale as soon as a second plugin appeared; every
+    dot-directory is the honest default.
+    """
+    return any(p.startswith(".") for p in rel_parts) or (
+        len(rel_parts) > 1 and rel_parts[0] in IGNORED_DIRS
+    )
+
+
+def is_daily(rel: str | Path) -> bool:
+    return bool(DAILY.match(Path(rel).stem))
 
 
 @dataclass(frozen=True)
@@ -34,7 +61,8 @@ class Skipped:
 
 def iter_notes(vault: Path):
     for path in sorted(vault.rglob("*.md")):
-        if any(part in IGNORED_DIRS for part in path.relative_to(vault).parts):
+        parts = path.relative_to(vault).parts
+        if is_hidden(parts) or (len(parts) > 1 and parts[0] == OURS):
             continue
         yield path
 
@@ -58,6 +86,11 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
             continue
         verb = protocol.verb(text)
         if verb is None:
+            continue
+        if config.trust.level_for(rel) == "L0":
+            # L0 is "Tiro does not touch this". A tag inside is a note, not a
+            # request, and the refusal goes in the journal, never in the note.
+            skipped.append(Skipped(rel, f"in an L0 folder; Tiro does not write there"))
             continue
         status = protocol.read_keys(text).get("tiro/status", "")
         if status == "needs-input" and not protocol.needs_work(text):

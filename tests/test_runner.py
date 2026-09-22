@@ -242,3 +242,169 @@ def test_file_refuses_without_the_obsidian_cli(ready, vault: Path) -> None:
     assert entry.outcome == "blocked"
     assert "Obsidian CLI" in entry.detail
     assert path.exists()  # nothing was moved
+
+
+# --- the tag is the consent ----------------------------------------------
+
+
+def test_a_tagged_note_runs_wherever_it_is_unless_the_folder_is_closed(ready, vault: Path) -> None:
+    """Areas/ is L1 in the fixture, Private/ is L0. The first runs, the second
+    is blocked and says why."""
+    (vault / "Areas/loose.md").write_text("---\ntiro: research\n---\n\nwhat is this?\n", encoding="utf-8")
+    (vault / "Private").mkdir()
+    diary = vault / "Private/diary.md"
+    diary.write_text("---\ntiro: research\n---\n\nmine\n", encoding="utf-8")
+    _age(vault)
+
+    record = _run(ready, _agent(research=JobOutput(block="answer", detail="d"),
+                                triage=JobOutput(block="y")))
+
+    by_note = {e.note: e for e in record.entries}
+    assert by_note["Areas/loose.md"].outcome == "done"
+    # The L0 note is refused in the journal and nowhere else: not even a
+    # "blocked" block, because that would be the write L0 forbids.
+    assert "Private/diary.md" not in by_note
+    skip = next(s for s in record.skipped if s["rel"] == "Private/diary.md")
+    assert "L0" in skip["why"]
+    assert diary.read_text() == "---\ntiro: research\n---\n\nmine\n"
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "[[Private/diary]]" in journal
+
+
+def test_file_moves_where_the_user_accepted_not_where_the_skill_says(ready, vault: Path) -> None:
+    path = vault / "00 Inbox/to-file.md"
+    path.write_text("---\ntiro: file\ntiro/filed-to: Tiro/to-file.md\n---\n\nbody\n", encoding="utf-8")
+    _age(vault)
+
+    record = _run(ready, _agent(
+        file=JobOutput(keys={"tiro/filed-to": "Tiro/elsewhere.md"}, block="x"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y"),
+    ))
+
+    entry = next(e for e in record.entries if e.note.endswith("to-file.md"))
+    assert entry.outcome == "blocked"
+    assert "the note wins" in entry.detail
+    assert path.exists()
+
+
+def test_a_refused_move_leaves_no_empty_folder_behind(ready, vault: Path) -> None:
+    path = vault / "00 Inbox/to-file.md"
+    path.write_text("---\ntiro: file\ntiro/filed-to: Tiro/New Area/to-file.md\n---\n\nbody\n",
+                    encoding="utf-8")
+    _age(vault)
+
+    _run(ready, _agent(
+        file=JobOutput(keys={"tiro/filed-to": "Tiro/New Area/to-file.md"}, block="x"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y"),
+    ))
+
+    assert path.exists()
+    assert not (vault / "Tiro/New Area").exists()
+
+
+@pytest.mark.parametrize("destination, why", [
+    ("../escaped.md", "outside the vault"),
+    ("/tmp/escaped.md", "outside the vault"),
+    ("Tiro/no-suffix", "not a markdown note"),
+    (".obsidian/plugins/x.md", "hidden or reserved"),
+])
+def test_a_destination_that_leaves_the_vault_is_refused(ready, vault: Path, destination, why) -> None:
+    """The destination is note content, and note content is the injection
+    channel. Never #2 has to hold against `../`."""
+    path = vault / "00 Inbox/to-file.md"
+    path.write_text(f"---\ntiro: file\ntiro/filed-to: {destination}\n---\n\nbody\n", encoding="utf-8")
+    _age(vault)
+
+    record = _run(ready, _agent(
+        file=JobOutput(keys={"tiro/filed-to": destination}, block="x"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y"),
+    ))
+
+    entry = next(e for e in record.entries if e.note.endswith("to-file.md"))
+    assert entry.outcome == "blocked"
+    assert why in entry.detail
+    assert path.exists()
+    assert not (vault.parent / "escaped.md").exists()
+    assert not Path("/tmp/escaped.md").exists()
+
+
+def test_tiros_own_report_cannot_queue_a_job(ready, vault: Path) -> None:
+    """Health.md says "try `#tiro research`". Read literally, lint would file
+    a research request against its own report every run."""
+    from tiro import scan as scan_mod
+
+    (vault / "Tiro").mkdir(exist_ok=True)
+    (vault / "Tiro/Health.md").write_text("- almost: try `#tiro research`\n#tiro/research\n",
+                                          encoding="utf-8")
+    jobs, _ = scan_mod.scan(ready, now=1e12)
+    assert not any(j.rel.startswith("Tiro/") for j in jobs)
+
+
+def test_an_unknown_verb_in_a_closed_folder_is_not_written_either(ready, vault: Path) -> None:
+    (vault / "Private").mkdir()
+    diary = vault / "Private/diary.md"
+    diary.write_text("---\ntiro: frobnicate\n---\n\nmine\n", encoding="utf-8")
+    _age(vault)
+
+    _run(ready, _agent(research=JobOutput(block="x"), triage=JobOutput(block="y")))
+
+    assert diary.read_text() == "---\ntiro: frobnicate\n---\n\nmine\n"
+
+
+def test_an_unexpected_failure_blocks_the_note_and_the_run_goes_on(ready, vault: Path) -> None:
+    """Never #4: a crash in one job is a blocked note with a reason, not a run
+    that ends before the journal is written."""
+    class Faulty(ScriptedAgent):
+        def run(self, request):
+            if request.verb == "research":
+                raise RuntimeError("the network fell over")
+            return super().run(request)
+
+    record = _run(ready, Faulty({"research": JobOutput(block="x"), "triage": JobOutput(block="y")}))
+
+    by_note = {e.note: e for e in record.entries}
+    assert by_note[NOTE].outcome == "blocked"
+    assert "RuntimeError" in by_note[NOTE].detail
+    assert any(e.outcome == "done" for e in record.entries)  # the triage jobs still ran
+    text = (vault / NOTE).read_text()
+    assert protocol.read_keys(text)["tiro/status"] == "blocked"
+    assert "the network fell over" in text
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "RuntimeError" in journal
+
+
+def test_changing_the_verb_is_an_edit(ready, vault: Path) -> None:
+    """triage → file is the accept the filing flow waits for. If the verb sat
+    outside the hash, the accept would never be noticed."""
+    out = {"research": JobOutput(block="x"), "triage": JobOutput(block="y", detail="proposed"),
+           "file": JobOutput(block="z")}
+    _run(ready, ScriptedAgent(dict(out)))
+    hostile = vault / "00 Inbox/hostile.md"
+    hostile.write_text(hostile.read_text().replace("tiro: triage", "tiro: file"), encoding="utf-8")
+    _age(vault)
+
+    second = _run(ready, ScriptedAgent(dict(out)))
+    assert [e.verb for e in second.entries if e.note.endswith("hostile.md")] == ["file"]
+
+
+def test_the_agent_may_not_write_the_users_verb() -> None:
+    """Otherwise spec could queue its own dispatch, and "only the user releases
+    it" would be a sentence in a prompt rather than a property."""
+    from tiro.agent import JobOutput as Out
+
+    with pytest.raises(AgentError, match="only the user"):
+        Out.from_json({"keys": {"tiro": "dispatch"}})
+    assert Out.from_json({"keys": {"tiro/filed-to": "x.md"}}).keys == {"tiro/filed-to": "x.md"}
+
+
+def test_without_rules_the_skill_is_told_to_infer_rather_than_ask(ready, vault: Path) -> None:
+    agent = _agent(research=JobOutput(block="x"), triage=JobOutput(block="y"))
+    _run(ready, agent)
+    assert any("no `.tiro/rules.md` yet" in call.skill for call in agent.calls)
+
+    (vault / ".tiro/rules.md").write_text("### R-001 — a rule\n", encoding="utf-8")
+    (vault / NOTE).write_text((vault / NOTE).read_text() + "\nmore\n", encoding="utf-8")
+    _age(vault)
+    agent = _agent(research=JobOutput(block="x"), triage=JobOutput(block="y"))
+    _run(ready, agent)
+    assert all("read it first" in call.skill for call in agent.calls)

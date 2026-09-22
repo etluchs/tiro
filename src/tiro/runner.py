@@ -86,6 +86,8 @@ def reset_crashed_notes(config: Config, git: Git) -> list[str]:
         text = note.read_text(encoding="utf-8", errors="replace")
         if protocol.read_keys(text).get("tiro/status") != "working":
             continue
+        if config.trust.level_for(note.relative_to(config.vault).as_posix()) == "L0":
+            continue  # the folder was closed after the crash; leave it be
         mtime = note.stat().st_mtime
         _atomic_write(note, protocol.set_key(text, "tiro/status", "queued"),
                       keep_mtime=mtime)
@@ -101,11 +103,15 @@ def apply_output(
     run_id: str,
     ops: VaultOps,
     baseline_mtime: float,
+    created_dirs: list[Path] | None = None,
 ) -> tuple[list[str], tuple[str, str] | None]:
     """Serialise the agent's result into the note. Returns (declared, moved).
 
     This is the only place a note is written. The agent never touches the disk,
     so every byte Tiro adds goes through here and looks the same everywhere.
+
+    ``created_dirs``, if given, collects directories made for a move, so that a
+    gate failure can take them away again along with the moved copy.
     """
     note = config.vault / job.rel
     text = note.read_text(encoding="utf-8")
@@ -118,6 +124,9 @@ def apply_output(
         raise _NoteMovedUnderUs(job.rel)
 
     text, note_id = protocol.ensure_id(text)
+    # Read before the skill's keys land on the note: this is the destination
+    # the user accepted, and the skill's is only allowed to agree with it.
+    accepted = protocol.read_keys(text).get("tiro/filed-to", "").strip()
 
     if job.verb == "dispatch":
         # Before the note is written, because the issue key is one of the
@@ -138,13 +147,30 @@ def apply_output(
     _atomic_write(note, text)
     declared = [job.rel]
     moved: tuple[str, str] | None = None
+    created_dirs = [] if created_dirs is None else created_dirs
 
     if job.verb == "file":
-        destination = output.keys.get("tiro/filed-to", "").strip()
-        if not destination:
-            raise AgentError("`file` returned no tiro/filed-to destination")
+        # The destination is the one the user accepted: the `tiro/filed-to`
+        # that was on the note when they wrote `tiro: file`. The skill may
+        # confirm it, not change it — otherwise "the tag is the accept" would
+        # accept whatever the model decided afterwards.
+        proposed = output.keys.get("tiro/filed-to", "").strip()
+        if not accepted:
+            raise AgentError(
+                "`file` needs a tiro/filed-to on the note to accept; run triage "
+                "first, or write the destination yourself"
+            )
+        if proposed and proposed != accepted:
+            raise AgentError(
+                f"the note accepts `{accepted}` but the skill returned "
+                f"`{proposed}`; the note wins — edit it if you meant the other"
+            )
+        destination = accepted
         # Refuse before touching anything, so a move we would have to undo is
-        # never started. The gate checks this again afterwards.
+        # never started. The gate checks all of this again afterwards.
+        problem = gate.destination_problem(config, destination)
+        if problem:
+            raise OpsUnavailable(f"cannot file to {destination}: {problem}")
         if not config.trust.permits(job.rel, gate.MOVE_FROM_TRUST):
             raise OpsUnavailable(
                 f"cannot move a note out of {job.rel}: that folder is "
@@ -156,6 +182,11 @@ def apply_output(
                 f"{config.trust.level_for(destination)}; raise it to "
                 f"{gate.MOVE_TO_TRUST} to let Tiro file there"
             )
+        # A destination folder that does not exist yet is fine: a vault without
+        # structure grows its folders one filing at a time. But an empty folder
+        # is visible in Obsidian, so one we made for a move that then failed is
+        # taken away again — only one we made, and only while it is empty.
+        made = _mkdirs(config.vault, (config.vault / destination).parent)
         try:
             ops.move(job.rel, destination)
         except Exception:
@@ -163,11 +194,35 @@ def apply_output(
             # destination. Remove that, never the original.
             if (config.vault / destination).exists() and (config.vault / job.rel).exists():
                 (config.vault / destination).unlink()
+            _rmdirs(made)
             raise
         declared.append(destination)
         moved = (job.rel, destination)
+        created_dirs.extend(made)
 
     return declared, moved
+
+
+def _mkdirs(vault: Path, target: Path) -> list[Path]:
+    """Create ``target`` and any missing parents inside the vault. Returns the
+    directories that did not exist before, deepest first."""
+    made: list[Path] = []
+    for parent in [target, *target.parents]:
+        if parent == vault or parent.exists():
+            break
+        made.append(parent)
+    for path in reversed(made):
+        path.mkdir()
+    return made
+
+
+def _rmdirs(made: list[Path]) -> None:
+    """Remove directories ``_mkdirs`` created, deepest first, while empty."""
+    for path in made:
+        try:
+            path.rmdir()
+        except OSError:
+            return
 
 
 class _NoteMovedUnderUs(Exception):
@@ -255,19 +310,44 @@ def execute_job(
 ) -> Outcome:
     note = config.vault / job.rel
 
+    # Trust first, before anything that writes — including the "unknown verb"
+    # block below. Only L0 fails this (every verb needs L2, and the tag grants
+    # it); the scan already skips L0, so this is the second check of the two.
+    # Writing a "blocked" block would be exactly the write L0 forbids, so the
+    # refusal goes in the journal alone.
+    required = gate.REQUIRED_TRUST.get(job.verb, "L2")
+    if not gate.note_permits(config, job.rel, required):
+        level = config.trust.level_for(job.rel)
+        return Outcome("skipped", f"`{job.verb}` needs {required}; {job.rel} is {level}")
+
     if not job.valid_verb:
         _block_note(config, job, f"unknown verb `{job.verb}`", run_id)
         _commit_block(git, job, run_id)
         return Outcome("blocked", f"unknown verb `{job.verb}`")
 
-    required = gate.REQUIRED_TRUST[job.verb]
-    if not config.trust.permits(job.rel, required):
-        level = config.trust.level_for(job.rel)
-        detail = f"`{job.verb}` needs {required}; {job.rel} is {level}"
+    try:
+        return _execute(config, git, ops, agent, job, run_id=run_id)
+    except Exception as exc:  # noqa: BLE001 - the last line of never #4
+        # Anything the handlers below did not expect. The note may have been
+        # written and not committed; put it back, say so on it and in the
+        # journal, and let the run go on to the next job.
+        git.restore([job.rel])
+        detail = f"unexpected failure: {type(exc).__name__}: {exc}"
         _block_note(config, job, detail, run_id)
         _commit_block(git, job, run_id)
         return Outcome("blocked", detail)
 
+
+def _execute(
+    config: Config,
+    git: Git,
+    ops: VaultOps,
+    agent: AgentRunner,
+    job: Job,
+    *,
+    run_id: str,
+) -> Outcome:
+    note = config.vault / job.rel
     before = gate.snapshot(config, git, ops, job.rel)
     text = note.read_text(encoding="utf-8")
     baseline_mtime = note.stat().st_mtime
@@ -285,10 +365,12 @@ def execute_job(
         effort=(config.jobs.get(job.verb) or {}).get("effort"),
     )
 
+    created_dirs: list[Path] = []
     try:
         output = agent.run(request)
         declared, moved = apply_output(
-            config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime
+            config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime,
+            created_dirs=created_dirs,
         )
     except _NoteMovedUnderUs:
         git.restore([job.rel])
@@ -306,6 +388,7 @@ def execute_job(
     )
     if not result.ok:
         gate.rollback(git, declared, created=[moved[1]] if moved else [])
+        _rmdirs(created_dirs)
         _block_note(config, job, "; ".join(result.failures), run_id)
         _commit_block(git, job, run_id)
         return Outcome("blocked", "gate: " + "; ".join(result.failures))
@@ -333,12 +416,21 @@ def _trailers(run_id: str, job: Job) -> dict[str, str]:
 
 def _render_skill(config: Config, job: Job, text: str) -> str:
     rules = config.tiro_dir / "rules.md"
+    if rules.exists():
+        rules_line = f"Vault filing rules: `{rules.relative_to(config.vault)}` — read it first.\n"
+    else:
+        rules_line = (
+            "This vault has no `.tiro/rules.md` yet. Where a skill tells you to "
+            "consult the rules, go by what the vault already does instead: look at "
+            "where notes like this one live, and say plainly that the proposal is "
+            "inferred rather than rule-backed. A proposal costs the user a glance; "
+            "a question costs them a decision.\n"
+        )
     return (
         _skill_text(config, job.verb)
         + "\n\n---\n\n## This job\n\n"
         + f"Note: `{job.rel}`\nVault root: `{config.vault}`\n"
-        + (f"Vault filing rules: `{rules.relative_to(config.vault)}` — read it first.\n"
-           if rules.exists() else "")
+        + rules_line
         + "\nThe note as it stands:\n\n<note>\n"
         + text
         + "\n</note>\n"

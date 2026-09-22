@@ -382,6 +382,12 @@ default = "L1"
 "Journal/" = "L0"        # the user's diary is nobody's business
 ```
 
+> **Superseded in part.** The code is normative where it differs from this
+> table: a note carrying a verb is L2 for itself unless its folder is L0; a
+> `tiro: file` written by the user is the accept a move needs, so the source
+> need only be above L0; `spec` and `dispatch` write a block and need L2, not
+> L3; and `"/"` names the vault root. See STATUS.md, "Decisions".
+
 The ladder is enforced twice: in the `can_use_tool` callback, before the tool
 runs, and again in the gate, after. Belt and braces, because the first is a
 policy decision and the second is a fact about the working tree.
