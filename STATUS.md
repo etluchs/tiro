@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **151 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **164 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -72,13 +72,8 @@ a broken link lives. The filesystem backend can, and gives a line number.
 `tiro chat`, `watch` mode, `reflect`, `index`, `connect`, `tiro accept` and
 `tiro reject`. Planned in [docs/ITERATION-2.md](docs/ITERATION-2.md).
 
-**One gap is urgent rather than planned.** ITERATION-1 says the correction log
-is written from day one, because `reflect` needs it and the data cannot be
-recovered retroactively. It was never implemented — there is no `corrections`
-in `src/` and no `.tiro/corrections.jsonl` in the vault. Every day it stays
-open is a day of evidence lost.
-
-Three jobs have never been run even once: `distill`, `spec`, and `dispatch`
+The correction log (ITERATION-2 M0) **is** built and running, so evidence has
+started accruing for `reflect`. Three jobs have never been run even once: `distill`, `spec`, and `dispatch`
 against a live Jira. Until `dispatch` runs, iteration 1's acceptance
 criterion 7 cannot be judged.
 

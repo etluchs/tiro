@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tiro import gate, journal, protocol
+from tiro import corrections, gate, journal, protocol
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
 from tiro.jira import Acli, JiraError, build_payload, note_label
@@ -32,6 +32,8 @@ class Outcome:
     detail: str = ""
     commit: str = ""
     usage: Usage = field(default_factory=Usage)
+    #: ids this job wrote a block for, so a later deletion is a correction.
+    wrote_block: list[str] = field(default_factory=list)
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -142,6 +144,7 @@ def apply_output(
     baseline_mtime: float,
     created_dirs: list[Path] | None = None,
     rewritten: set[str] | None = None,
+    wrote_block: list[str] | None = None,
 ) -> tuple[list[str], tuple[str, str] | None]:
     """Serialise the agent's result into the note. Returns (declared, moved).
 
@@ -173,6 +176,8 @@ def apply_output(
 
     if output.block.strip():
         text = protocol.upsert_block(text, job=job.verb, id=note_id, body=output.block)
+        if wrote_block is not None:
+            wrote_block.append(note_id)
     for key, value in output.keys.items():
         text = protocol.set_key(text, key, value)
     text = protocol.set_key(text, "tiro/status", output.status)
@@ -247,6 +252,15 @@ def apply_output(
         rewritten.update(relinked)
         moved = (job.rel, destination)
         created_dirs.extend(made)
+
+        # Record where the note actually landed, distinct from `tiro/filed-to`,
+        # which is a proposal the user may edit. The correction log needs to
+        # tell "Tiro put it here and the user moved it" from "Tiro suggested
+        # here and the user never agreed", and only a record of the former
+        # separates them.
+        moved_text = (config.vault / destination).read_text(encoding="utf-8")
+        _atomic_write(config.vault / destination,
+                      protocol.set_key(moved_text, "tiro/filed", destination))
 
     return declared, moved
 
@@ -415,11 +429,12 @@ def _execute(
 
     created_dirs: list[Path] = []
     rewritten: set[str] = set()
+    wrote_block: list[str] = []
     try:
         output = agent.run(request)
         declared, moved = apply_output(
             config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime,
-            created_dirs=created_dirs, rewritten=rewritten,
+            created_dirs=created_dirs, rewritten=rewritten, wrote_block=wrote_block,
         )
     except _NoteMovedUnderUs:
         git.restore([job.rel])
@@ -452,7 +467,7 @@ def _execute(
         f"tiro({job.verb}): {Path(job.rel).stem}\n\n{summary}",
         _trailers(run_id, job),
     )
-    return Outcome(outcome_name, output.detail, sha or "", output.usage)
+    return Outcome(outcome_name, output.detail, sha or "", output.usage, wrote_block)
 
 
 def _commit_block(git: Git, job: Job, run_id: str) -> None:
@@ -460,6 +475,10 @@ def _commit_block(git: Git, job: Job, run_id: str) -> None:
     under us is the user's business, not a commit."""
     if (git.repo / job.rel).exists():
         git.commit([job.rel], f"tiro: block {job.rel}", _trailers(run_id, job))
+
+
+def _link(rel: str) -> str:
+    return rel[:-3] if rel.endswith(".md") else rel
 
 
 def _trailers(run_id: str, job: Job) -> dict[str, str]:
@@ -534,6 +553,16 @@ def once(
         record.skipped = [{"rel": s.rel, "why": s.why} for s in skipped]
 
         state = _load_state(config)
+
+        # Before any job runs, so what is observed is the user's doing and not
+        # this run's. Costs no model time: it is a diff between what Tiro
+        # recorded and what is true (DESIGN section 7).
+        for correction in corrections.log(config, corrections.observe(config, state)):
+            record.note_line(
+                f"noted a correction: `{correction.kind}` on [[{_link(correction.note)}]]"
+                + (f" — {correction.was} → {correction.now}"
+                   if correction.kind != "rejected-block" else " — the block was deleted")
+            )
         day = run_id[:10]
         deadline = time.monotonic() + config.run.max_seconds
 
@@ -557,6 +586,17 @@ def once(
             outcome = execute_job(config, git, ops, agent, job, run_id=run_id)
             record.add(journal.Entry(job.verb, job.rel, outcome.outcome,
                                      outcome.detail, outcome.commit, outcome.usage))
+            for block_id in outcome.wrote_block:
+                corrections.remember_block(state, block_id, run_id)
+            if job.verb == "triage" and outcome.outcome == "done":
+                # Remembered now, because the proposal lives in a frontmatter
+                # key the user is free to overwrite — and overwriting it is
+                # exactly the correction we are here to notice.
+                note = config.vault / job.rel
+                if note.exists():
+                    proposed = protocol.read_keys(
+                        note.read_text(encoding="utf-8")).get("tiro/filed-to", "")
+                    corrections.remember_proposal(state, job.rel, proposed, run_id)
             # Written immediately, not at the end: a run killed mid-pass must
             # still have spent what it spent as far as tomorrow is concerned.
             record_spend(state, day, outcome.usage)

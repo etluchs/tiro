@@ -14,17 +14,11 @@ the design that makes Tiro more than a skill pack.
 
 Design rationale: [DESIGN.md](DESIGN.md) §7. What shipped: [ITERATION-1](ITERATION-1.md).
 
-## Do this first, before anything else in this plan
+## M0 is done
 
-**The correction log is not implemented.** ITERATION-1 says it "is written from
-day one so that `reflect` has data to work with in iteration 2 — logging costs
-nothing and the data cannot be recovered retroactively". It was never built:
-there is no `corrections` anywhere in `src/`, and no `.tiro/corrections.jsonl`
-in the vault.
-
-Every day this stays open is a day of training data that cannot be recovered.
-It is perhaps half a day's work and it blocks M2. It should land before the
-week of unattended running, not after.
+The correction log landed on 2026-09-22, before the week of unattended running
+rather than after it, so `reflect` will have evidence to read. The rest of this
+plan stands as written.
 
 ## What ships
 
@@ -44,7 +38,7 @@ beyond Jira.
 
 ## Milestones
 
-### M0 — The correction log (½ day) — *do this now, not in sequence*
+### M0 — The correction log — **done, 2026-09-22**
 Append-only `.tiro/corrections.jsonl`. One line whenever the next run notices
 that what Tiro recorded in `tiro/*` and what is true now have diverged:
 
