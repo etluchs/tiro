@@ -39,20 +39,27 @@ beyond Jira.
 ## Milestones
 
 ### M0 — The correction log — **done, 2026-09-22**
-Append-only `.tiro/corrections.jsonl`. One line whenever the next run notices
-that what Tiro recorded in `tiro/*` and what is true now have diverged:
+Append-only `.tiro/corrections.jsonl`, written from the scan before any job
+runs, so what it sees is the user's doing rather than this run's. Three
+divergences shipped, each a diff between a record Tiro made and what is true:
 
-- `tiro/filed-to` said `uzh/`, the note is in `mch/` → a filing correction.
-- Tiro proposed tags, the user removed or changed them → a tagging correction.
-- Tiro's block was deleted outright → a rejection, which is the loudest signal
-  in the system and currently invisible.
+- `overrode-proposal` — triage proposed a destination, `tiro/filed-to` now says
+  somewhere else. The proposal is remembered in `state.json` when it is made,
+  because the key it lives in is one the user may overwrite.
+- `moved-after-filing` — `file` recorded where it put the note in a new
+  `tiro/filed` key, and the note is elsewhere now.
+- `rejected-block` — Tiro wrote a block and it is gone. Keyed on a record that
+  a block was written, not on `tiro/id`, which is assigned on first touch.
 
-It is a diff between frontmatter and reality, so it costs no model time and no
-judgement. Write it from the scan, not from a job, so it is recorded even for
-notes nothing is queued against.
-- **Done when:** filing a note somewhere other than the proposal produces
-  exactly one line, running twice produces no second line, and a week of the
-  user's ordinary editing produces no false positives.
+**Tags were dropped from this milestone.** "The user never applied the tags" and
+"the user applied them and took them off" are indistinguishable without history,
+and only the second is a correction. Guessing would poison the log, and the
+acceptance criterion below says the log must be honest before it is useful.
+- **Done:** filing a note somewhere other than the proposal produces exactly one
+  line; running twice produces no second line; a corrupt line is skipped rather
+  than fatal. Most of the 13 tests are false-positive cases. The remaining
+  question is the one only time answers — whether a week of ordinary editing
+  produces a clean log.
 
 ### M1 — dispatch, live (½ day)
 Nothing to build; everything to verify. Flip `dispatch.live`, file one real
