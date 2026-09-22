@@ -9,6 +9,13 @@ max_seconds = 900
 # Skip notes touched in the last N seconds: the user is probably typing (DESIGN §5.3).
 skip_recent_seconds = 60
 max_attempts_per_note_per_day = 3
+# Daily ceilings. These are what make an unattended timer safe to leave on:
+# the caps above bound one run, nothing bounded forty-eight of them. Starting
+# numbers, deliberately loose — tune them after a week of real traffic
+# (DESIGN open question 3). On a Claude subscription the SDK often reports no
+# dollar figure, so the token ceiling is the one that always bites.
+max_cost_usd_per_day = 5.0
+max_tokens_per_day = 2000000
 push = true
 
 [agent]

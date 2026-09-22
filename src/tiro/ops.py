@@ -77,15 +77,68 @@ def probe_obsidian(timeout: float = 5.0) -> Probe:
     return Probe(True, True, (done.stdout or "").strip()[:200])
 
 
+#: What the desktop app's process is called. macOS capitalises it; Linux does
+#: not. Both are tried because getting it wrong fails safe in the wrong
+#: direction: a running Obsidian we fail to see only costs us the CLI backend.
+_PROCESS_NAMES = ("Obsidian", "obsidian")
+
+
+def obsidian_is_running(timeout: float = 2.0) -> bool:
+    """Is the desktop app already up?
+
+    ``probe_obsidian`` *launches* Obsidian when it is not running. That is
+    acceptable when a human typed the command and wrong when a timer fired it —
+    opening an app on someone's laptop at 03:00 is not a thing a background job
+    may decide to do. So ``auto`` asks this first and settles for the filesystem
+    backend rather than starting anything.
+
+    Anything we cannot answer counts as "not running", because the cost of
+    being wrong that way is a weaker backend, and the cost of being wrong the
+    other way is an app nobody asked for.
+    """
+    exe = shutil.which("pgrep")
+    if not exe:  # pragma: no cover - platform specific
+        return False
+    for name in _PROCESS_NAMES:
+        try:
+            done = subprocess.run(
+                [exe, "-x", name], capture_output=True, text=True, timeout=timeout
+            )
+        except (subprocess.TimeoutExpired, OSError):  # pragma: no cover
+            return False
+        if done.returncode == 0 and done.stdout.strip():
+            return True
+    return False
+
+
 def for_vault(vault: Path, *, backend: str = "auto", timeout: float = 5.0) -> VaultOps:
+    """Choose a backend.
+
+    ``fs`` never probes. ``cli`` always probes and may therefore launch
+    Obsidian — that is what asking for it explicitly means. ``auto`` probes only
+    when the app is already up, so the backend follows reality: full adapter at
+    your desk, filesystem fallback on a timer at night.
+    """
     from tiro.ops_cli import ObsidianCliOps
     from tiro.ops_fs import FilesystemOps
 
     if backend == "fs":
         return FilesystemOps(vault)
-    probe = probe_obsidian(timeout)
     if backend == "cli":
+        probe = probe_obsidian(timeout)
         if not probe.usable:
             raise OpsUnavailable(f"obsidian CLI required but unusable: {probe.detail}")
-        return ObsidianCliOps(vault)
-    return ObsidianCliOps(vault) if probe.usable else FilesystemOps(vault)
+        cli = ObsidianCliOps(vault)
+        answers, why = cli.answers_queries()
+        if not answers:
+            raise OpsUnavailable(f"obsidian CLI required but not answering: {why}")
+        return cli
+    if not obsidian_is_running():
+        return FilesystemOps(vault)
+    if not probe_obsidian(timeout).usable:
+        return FilesystemOps(vault)
+    # Version answering is not enough. An installer can be new enough to report
+    # a version and too old to answer a query, and a backend that returns
+    # nothing to every question disables the gate's link check without a word.
+    cli = ObsidianCliOps(vault)
+    return cli if cli.answers_queries()[0] else FilesystemOps(vault)

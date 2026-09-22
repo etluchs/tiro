@@ -49,9 +49,30 @@ class ObsidianCliOps:
         "move": ["move", "path={src}", "to={dst}"],
     }
 
+    #: Printed by an installer too old to have full CLI support. It goes to
+    #: stdout, with a zero exit code and no JSON, so it has to be recognised by
+    #: name to be reported as the failure it is.
+    STALE_INSTALLER = "installer is out of date"
+
     def __init__(self, vault: Path, exe: str | None = None) -> None:
         self.vault = vault
         self.exe = exe or shutil.which("obsidian") or "obsidian"
+
+    def answers_queries(self) -> tuple[bool, str]:
+        """Does this CLI actually return data, not just a version string?
+
+        ``obsidian version`` answering is not enough to trust the backend: the
+        version command works on installers whose query commands do not. This
+        asks a real question and insists on a real answer.
+        """
+        res = self.run("unresolved")
+        if res.ok:
+            return True, "answers queries"
+        text = (res.err or res.out).strip().replace("\n", " ")
+        if self.STALE_INSTALLER in text:
+            return False, ("Obsidian installer is too old for CLI queries; "
+                           "download the latest installer from obsidian.md/download")
+        return False, text[:200] or "no answer"
 
     # -- plumbing ---------------------------------------------------------
 
@@ -75,9 +96,24 @@ class ObsidianCliOps:
             parsed = None
         # The exit code is not evidence. Output that parses, or output that is
         # plainly not an error, is.
-        ok = parsed is not None or (bool(out.strip()) and not err.strip())
+        wants_json = any(part == "format=json" for part in args)
         if not out.strip() and not err.strip():
-            ok = True  # an empty result is a legitimate answer (no orphans, say)
+            # An empty result is a legitimate answer: no orphans, say.
+            ok = True
+        elif wants_json:
+            # We asked for JSON, so JSON is the only evidence of success.
+            #
+            # This used to accept "stdout is non-empty and stderr is empty",
+            # which an older Obsidian installer satisfies by printing
+            #   Your Obsidian installer is out of date … better CLI support
+            # to stdout and no JSON at all. Every query then looked like it
+            # succeeded and returned nothing, which made the gate's
+            # link-integrity rule a silent no-op: no broken links before, none
+            # after, nothing ever fails. A check that cannot fail is worse than
+            # one that is absent, because it is counted on.
+            ok = parsed is not None
+        else:
+            ok = bool(out.strip()) and not err.strip()
         return CliResult(ok, out, err, parsed)
 
     def _list_of_notes(self, command: str) -> list[str]:

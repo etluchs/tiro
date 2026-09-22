@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. Replace __REPO__ and __HOME__, then see deploy/README.md.
+  macOS uses launchd; the design docs say systemd, which is the Linux shape.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.tiro.once</string>
+
+  <!-- The venv's console script, not `uv run`: a timer should not resolve
+       dependencies or touch the network before it starts work. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/.venv/bin/tiro</string>
+    <string>once</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <!-- launchd inherits none of a login shell's PATH. git is in /usr/bin,
+       uv and acli in /opt/homebrew/bin, and the Obsidian CLI lives inside
+       the app bundle. Without this, Tiro silently falls back every run. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Obsidian.app/Contents/MacOS</string>
+    <!-- Otherwise Python buffers stdout when it is not a terminal and the log
+         stays empty until the run exits, which is exactly when you are
+         watching it to find out whether it is stuck. -->
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+
+  <!-- Half-hourly. A missed fire (laptop asleep) runs once on wake, not once
+       per interval missed. -->
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <!-- Loading the agent should not immediately spend money; the first run is
+       one interval away. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/tiro.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/tiro.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>

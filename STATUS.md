@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **136 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **146 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -35,9 +35,15 @@ correcting one is a one-line edit. **`tiro doctor` exercises them all and
 reports exactly which failed**, so confirming the surface is one command rather
 than one failed job at a time.
 
-Until the Obsidian CLI is confirmed, the filesystem backend runs instead: `lint`
-says in its report that its link numbers are an approximation, and `file`
-refuses rather than moving a note without Obsidian to rewrite the links.
+**Confirmed 2026-09-22, and the news is bad.** `acli` answers: auth and search
+both work. The Obsidian CLI answers `version` but **not its query commands** —
+this installer prints "Your Obsidian installer is out of date" to stdout, exit
+code 0, no JSON. The adapter counted that as success, so every query returned
+nothing and the gate's link-integrity rule became a no-op: no broken links
+before a job, none after, nothing ever fails. `tiro doctor` now reports it, the
+adapter refuses JSON that is not JSON, and `auto` verifies with a real query
+before choosing the CLI backend. Until the installer is updated the filesystem
+backend runs, `lint` says its numbers are an approximation, and `file` refuses.
 
 One known gap waits on that confirmation: when Obsidian moves a note it
 rewrites the inbound links in *other* notes, and the gate will see those as

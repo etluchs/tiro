@@ -50,16 +50,22 @@ def cmd_status(args: argparse.Namespace) -> int:
             ok, detail = git.can_push()
             print(f"push     {'ok' if ok else 'NO — ' + detail}")
 
-    if args.backend == "fs":
-        # Not probed: `obsidian version` launches the app if it is not running,
-        # and `--backend fs` is how the user says not to.
-        print("obsidian unavailable — not probed, --backend fs")
-        print("         (the filesystem backend will be used; `file` is refused)")
-    else:
+    # Never probe unless the app is already up, or the user asked for the CLI
+    # by name: the probe launches Obsidian, and `status` is often the first
+    # thing the owner of a new timer runs.
+    def probe_line() -> str:
         probe = ops_mod.probe_obsidian()
-        print(f"obsidian {'ok — ' + probe.detail if probe.usable else 'unavailable — ' + probe.detail}")
-        if not probe.usable:
-            print("         (the filesystem backend will be used; `file` is refused)")
+        return ("ok — " if probe.usable else "unavailable — ") + probe.detail
+
+    if args.backend == "fs":
+        line = "unavailable — not probed, --backend fs"
+    elif args.backend != "cli" and not ops_mod.obsidian_is_running():
+        line = "unavailable — not running, and probing would launch it"
+    else:
+        line = probe_line()
+    print(f"obsidian {line}")
+    if line.startswith("unavailable"):
+        print("         (the filesystem backend will be used; `file` is refused)")
 
     acli = Acli(site=config.dispatch.site)
     if not acli.installed:
@@ -74,6 +80,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     for folder, level in sorted(config.trust.folders.items()):
         print(f"         {folder:<24} {level}  {TRUST_MEANING[level]}")
     print(f"inbox    {config.lint.inbox or '(none configured; lint skips the stale check)'}")
+
+    day = journal.new_run_id()[:10]
+    state = runner._load_state(config)
+    today = runner._spend_today(state, day)
+    caps = []
+    if config.run.max_cost_usd_per_day is not None:
+        caps.append(f"${today['cost_usd']:.2f} of ${config.run.max_cost_usd_per_day:.2f}")
+    if config.run.max_tokens_per_day is not None:
+        caps.append(f"{today['tokens']:,} of {config.run.max_tokens_per_day:,} tokens")
+    print(f"budget   {', '.join(caps) if caps else 'no daily ceiling set'}"
+          f"  ({today['jobs']} job(s) today)")
+    spent = runner.over_budget(config, state, day)
+    if spent:
+        print(f"         SPENT — {spent}")
 
     jobs, skipped = scan.scan(config)
     print(f"\nqueue    {len(jobs)} job(s), {len(skipped)} skipped")
@@ -205,6 +225,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         from tiro.ops_cli import ObsidianCliOps
 
         cli = ObsidianCliOps(config.vault)
+        answers, why = cli.answers_queries()
+        print(f"  queries      {'ok' if answers else 'FAILED'}  {why}")
+        if not answers:
+            failures += 1
+            print("               (the filesystem backend will be used instead; "
+                  "`file` is refused and lint's link numbers are approximate)")
         for name in ("unresolved", "orphans", "deadends"):
             result = cli.run(name)
             status = "ok" if result.ok else "FAILED"
@@ -278,6 +304,20 @@ def main(argv: list[str] | None = None) -> int:
         return args.fn(args)
     except ConfigError as exc:
         print(f"configuration: {exc}", file=sys.stderr)
+        return 2
+    except PermissionError as exc:
+        # From a timer this is almost always macOS privacy control: a launchd
+        # agent has none of the Documents/iCloud/OneDrive access the terminal
+        # that granted it does. A traceback in a log file every half hour is
+        # not a report, so say the useful thing instead.
+        print(f"cannot read the vault: {exc}\n"
+              "If this ran from a timer, the background job lacks access to "
+              "that folder. Either keep the vault outside Documents and cloud "
+              "storage, or grant Full Disk Access to the program in the "
+              "LaunchAgent (see deploy/README.md).", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"cannot read the vault: {exc}", file=sys.stderr)
         return 2
 
 

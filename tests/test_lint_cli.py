@@ -323,3 +323,83 @@ def _args(config, vault: Path):
 
     return argparse.Namespace(root=str(config.root), vault=str(vault),
                               backend="fs", dry_run=False)
+
+
+def test_auto_backend_does_not_launch_obsidian(monkeypatch, vault: Path) -> None:
+    """The probe starts the app. A timer firing at 03:00 must not."""
+    from tiro import ops as ops_mod
+
+    launched: list[str] = []
+
+    def never() -> None:
+        launched.append("probed")
+        raise AssertionError("auto must not probe while Obsidian is down")
+
+    monkeypatch.setattr(ops_mod, "obsidian_is_running", lambda *a, **k: False)
+    monkeypatch.setattr(ops_mod, "probe_obsidian", lambda *a, **k: never())
+
+    ops = ops_mod.for_vault(vault, backend="auto")
+    assert ops.name == "filesystem"
+    assert launched == []
+
+
+def test_asking_for_the_cli_by_name_still_probes(monkeypatch, vault: Path) -> None:
+    """`--backend cli` is a deliberate request, and may launch the app."""
+    from tiro import ops as ops_mod
+
+    from tiro.ops_cli import ObsidianCliOps
+
+    probed: list[str] = []
+    monkeypatch.setattr(ops_mod, "obsidian_is_running", lambda *a, **k: False)
+    monkeypatch.setattr(ops_mod, "probe_obsidian",
+                        lambda *a, **k: probed.append("x") or ops_mod.Probe(True, True, "1.12"))
+    monkeypatch.setattr(ObsidianCliOps, "answers_queries", lambda self: (True, "answers queries"))
+
+    assert ops_mod.for_vault(vault, backend="cli").name == "obsidian-cli"
+    assert probed == ["x"]
+
+
+def test_a_cli_that_answers_version_but_not_queries_is_not_used(monkeypatch, vault: Path) -> None:
+    """An installer can be new enough to report a version and too old to answer
+    a query. Trusting it makes the gate's link check a silent no-op."""
+    from tiro import ops as ops_mod
+    from tiro.ops_cli import ObsidianCliOps
+
+    monkeypatch.setattr(ops_mod, "obsidian_is_running", lambda *a, **k: True)
+    monkeypatch.setattr(ops_mod, "probe_obsidian", lambda *a, **k: ops_mod.Probe(True, True, "1.12"))
+    monkeypatch.setattr(ObsidianCliOps, "answers_queries",
+                        lambda self: (False, "installer is out of date"))
+
+    assert ops_mod.for_vault(vault, backend="auto").name == "filesystem"
+
+
+def test_json_output_that_is_not_json_is_a_failure(vault: Path) -> None:
+    """The banner an old installer prints to stdout, with exit code 0 and no
+    JSON, used to count as success."""
+    from tiro.ops_cli import ObsidianCliOps
+
+    cli = ObsidianCliOps(vault, exe="/usr/bin/true")
+    banner = "Your Obsidian installer is out of date. Please download the latest installer"
+
+    def fake(command, **params):
+        from tiro.ops_cli import CliResult
+        args = cli.COMMANDS[command]
+        wants_json = "format=json" in args
+        return CliResult(not wants_json, banner, "", None)
+
+    assert "format=json" in cli.COMMANDS["unresolved"]
+    assert fake("unresolved").ok is False
+    assert fake("move", src="a", dst="b").ok is True
+
+
+def test_status_does_not_probe_a_sleeping_obsidian(config, vault: Path, capsys, monkeypatch) -> None:
+    from tiro import ops as ops_mod
+
+    monkeypatch.setattr(ops_mod, "obsidian_is_running", lambda *a, **k: False)
+    monkeypatch.setattr(ops_mod, "probe_obsidian",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("probed")))
+
+    cli.main(["--root", str(config.root), "--vault", str(vault), "status"])
+    out = capsys.readouterr().out
+    assert "probing would launch it" in out
+    assert "`file` is refused" in out

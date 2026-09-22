@@ -468,3 +468,104 @@ def test_a_runs_usage_is_the_sum_of_its_jobs(ready, vault: Path) -> None:
 
     journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
     assert "tokens" in journal and "$" in journal
+
+
+# --- the daily ceiling, which is what makes a timer safe to leave on ------
+
+
+def test_a_run_stops_once_the_days_budget_is_spent(ready, vault: Path) -> None:
+    from dataclasses import replace
+
+    from tiro.agent import Usage
+    from tiro.config import RunConfig
+
+    config = replace(ready, run=replace(ready.run, max_tokens_per_day=100))
+    pricey = JobOutput(block="x", detail="d", usage=Usage(output_tokens=90))
+
+    first = _run(config, _agent(research=pricey, triage=pricey, file=pricey))
+    # A job's cost is not knowable before it runs, so the ceiling is "stop once
+    # past it" and may overshoot by exactly one job: 90 is under 100 so the
+    # second starts, 180 is over so the third never does. The fixture has three
+    # taggable notes, so two running is the documented behaviour, not a leak.
+    assert len(first.entries) == 2
+    assert any("token ceiling is spent" in n for n in first.notes)
+
+    _age(vault)
+    second = _run(config, _agent(research=pricey, triage=pricey, file=pricey))
+    assert second.entries == []
+    assert any("token ceiling is spent" in n for n in second.notes)
+
+    journal = (vault / "Tiro/Journal" / f"{second.run_id[:10]}.md").read_text()
+    assert "stopped early" in journal
+
+
+def test_the_cost_ceiling_works_the_same_way(ready) -> None:
+    from dataclasses import replace
+
+    from tiro.agent import Usage
+    from tiro import runner as r
+
+    config = replace(ready, run=replace(ready.run, max_cost_usd_per_day=0.10))
+    state = {"attempts": {}, "spend": {}}
+    assert r.over_budget(config, state, "2026-09-22") is None
+    r.record_spend(state, "2026-09-22", Usage(output_tokens=5, cost_usd=0.04))
+    assert r.over_budget(config, state, "2026-09-22") is None
+    r.record_spend(state, "2026-09-22", Usage(output_tokens=5, cost_usd=0.07))
+    assert "cost ceiling" in r.over_budget(config, state, "2026-09-22")
+    # Yesterday's spend does not count against today.
+    assert r.over_budget(config, state, "2026-09-23") is None
+
+
+def test_no_ceiling_configured_means_no_ceiling(ready) -> None:
+    from tiro.agent import Usage
+    from tiro import runner as r
+
+    state = {"attempts": {}, "spend": {}}
+    for _ in range(50):
+        r.record_spend(state, "2026-09-22", Usage(output_tokens=100000, cost_usd=99.0))
+    assert ready.run.max_tokens_per_day is None
+    assert r.over_budget(ready, state, "2026-09-22") is None
+
+
+def test_spend_is_written_as_each_job_finishes(ready, vault: Path) -> None:
+    """A run killed mid-pass must still have spent what it spent, as far as
+    tomorrow's ceiling is concerned."""
+    from tiro.agent import Usage
+    from tiro import runner as r
+
+    record = _run(ready, _agent(
+        research=JobOutput(block="x", usage=Usage(output_tokens=7, cost_usd=0.02)),
+        triage=JobOutput(block="y", usage=Usage(output_tokens=3, cost_usd=0.01)),
+    ))
+    day = record.run_id[:10]
+    today = r._load_state(ready)["spend"][day]
+    assert today["tokens"] == record.usage.total_tokens > 0
+    assert today["jobs"] == len(record.entries)
+
+
+def test_a_failed_push_is_reported_in_the_journal(ready, vault: Path) -> None:
+    """A vault that has quietly stopped syncing must say so where the user
+    looks, not only on a terminal a timer does not have."""
+    from tiro.vcs import Git
+
+    class Offline(Git):
+        """A remote that accepts a rebase (there is nothing to fetch) and
+        refuses a push, which is what a dead network or a bad key looks like."""
+
+        def has_remote(self) -> bool:
+            return True
+
+        def pull_rebase(self):
+            return True, "up to date"
+
+        def push(self):
+            return False, "Could not read from remote repository"
+
+    record = runner.once(ready, agent=_agent(research=JobOutput(block="x"),
+                                             triage=JobOutput(block="y")),
+                         ops=FilesystemOps(vault), git=Offline(vault))
+
+    assert any("could not push" in n for n in record.notes)
+    journal = (vault / "Tiro/Journal" / f"{record.run_id[:10]}.md").read_text()
+    assert "could not push" in journal
+    assert "Could not read from remote repository" in journal

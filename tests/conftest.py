@@ -78,7 +78,17 @@ REPO = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def config(vault: Path):
     """The real tiro repo (skills, constitution) against a throwaway vault —
-    which is exactly the shipped arrangement: two sibling repos."""
-    from tiro.config import Config
+    which is exactly the shipped arrangement: two sibling repos.
 
-    return Config.load(root=REPO, vault=vault)
+    Budgets and lint settings are pinned to their defaults rather than taken
+    from the repo's own `tiro.toml`. That file is gitignored and holds whatever
+    the developer happens to run with, so inheriting it makes a test pass or
+    fail depending on whose machine it is — which is how a daily-ceiling test
+    started failing the moment a real ceiling was configured.
+    """
+    from dataclasses import replace
+
+    from tiro.config import Config, LintConfig, RunConfig
+
+    return replace(Config.load(root=REPO, vault=vault),
+                   run=RunConfig(), lint=LintConfig())

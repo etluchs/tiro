@@ -63,11 +63,14 @@ def _state_path(config: Config) -> Path:
 def _load_state(config: Config) -> dict:
     path = _state_path(config)
     if not path.exists():
-        return {"attempts": {}}
+        return {"attempts": {}, "spend": {}}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"attempts": {}}
+        return {"attempts": {}, "spend": {}}
+    state.setdefault("attempts", {})
+    state.setdefault("spend", {})
+    return state
 
 
 def _save_state(config: Config, state: dict) -> None:
@@ -78,6 +81,38 @@ def _save_state(config: Config, state: dict) -> None:
 
 def _attempts_key(job: Job, day: str) -> str:
     return f"{day}|{job.rel}"
+
+
+def _spend_today(state: dict, day: str) -> dict:
+    return state.setdefault("spend", {}).setdefault(
+        day, {"cost_usd": 0.0, "tokens": 0, "jobs": 0}
+    )
+
+
+def record_spend(state: dict, day: str, usage: Usage) -> None:
+    today = _spend_today(state, day)
+    today["cost_usd"] = round(today["cost_usd"] + (usage.cost_usd or 0.0), 6)
+    today["tokens"] += usage.total_tokens
+    today["jobs"] += 1
+
+
+def over_budget(config: Config, state: dict, day: str) -> str | None:
+    """Why today's budget is spent, or None.
+
+    Checked before each job rather than after, because a job's cost is not
+    knowable in advance. So the ceiling is "stop once past it", which can
+    overshoot by one job — bounded by that job's own turn and time limits, and
+    far better than a timer with no ceiling at all.
+    """
+    today = _spend_today(state, day)
+    ceiling = config.run.max_cost_usd_per_day
+    if ceiling is not None and today["cost_usd"] >= ceiling:
+        return f"today's cost ceiling is spent: ${today['cost_usd']:.2f} of ${ceiling:.2f}"
+    ceiling = config.run.max_tokens_per_day
+    if ceiling is not None and today["tokens"] >= ceiling:
+        return (f"today's token ceiling is spent: {today['tokens']:,} of "
+                f"{ceiling:,}")
+    return None
 
 
 def reset_crashed_notes(config: Config, git: Git) -> list[str]:
@@ -490,6 +525,11 @@ def once(
             if time.monotonic() > deadline:
                 record.note_line("stopped early: the run's time budget ran out")
                 break
+            spent = over_budget(config, state, day)
+            if spent:
+                record.note_line(f"**stopped early** — {spent}. Nothing further runs "
+                                 "until tomorrow; raise `[run]` in `tiro.toml` to change that")
+                break
             key = _attempts_key(job, day)
             attempts = int(state["attempts"].get(key, 0))
             if attempts >= config.run.max_attempts_per_note_per_day:
@@ -501,8 +541,27 @@ def once(
             outcome = execute_job(config, git, ops, agent, job, run_id=run_id)
             record.add(journal.Entry(job.verb, job.rel, outcome.outcome,
                                      outcome.detail, outcome.commit, outcome.usage))
+            # Written immediately, not at the end: a run killed mid-pass must
+            # still have spent what it spent as far as tomorrow is concerned.
+            record_spend(state, day, outcome.usage)
+            _save_state(config, state)
 
         journal.write_questions(config)
+
+        # Push the job commits *before* the journal is written, so that a
+        # failure can still be reported in it. It used to happen afterwards,
+        # which meant a vault that had quietly stopped syncing said so nowhere:
+        # not in the journal, not in run.json, only on a terminal that a timer
+        # does not have.
+        pushed = True
+        if config.run.push and git.has_remote():
+            pushed, detail = git.push()
+            if not pushed:
+                record.note_line(
+                    f"**could not push** — {detail}. The work is committed here but "
+                    "the remote has not got it; the next run tries again."
+                )
+
         record.finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
         journal.write_journal(config, record)
         journal.write_run_record(config, record)
@@ -511,10 +570,10 @@ def once(
             f"tiro(journal): run {run_id}",
             {"Tiro-Run": run_id, "Tiro-Job": "journal"},
         )
-
-        if config.run.push and git.has_remote():
-            ok, detail = git.push()
-            if not ok:
-                record.note_line(f"could not push: {detail}")
+        # And carry the journal itself up, now that it is written. Only worth
+        # trying when the first push worked; if it did not, this run has already
+        # said so and the next run will carry both.
+        if pushed and config.run.push and git.has_remote():
+            git.push()
 
     return record

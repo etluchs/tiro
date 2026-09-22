@@ -116,10 +116,22 @@ class TrustMap:
 
 @dataclass(frozen=True)
 class RunConfig:
+    """Bounds on one run, and on a day of runs (DESIGN section 5.4).
+
+    The two per-day ceilings are what makes a timer safe to leave on: the
+    per-run caps bound one pass, but nothing bounded forty-eight passes until
+    these existed. ``None`` means no ceiling, which is the default only because
+    the right number needs a week of real traffic to pick (DESIGN open
+    question 3). On a Claude subscription the SDK often reports no dollar
+    figure, so ``max_tokens_per_day`` is the lever that always works.
+    """
+
     max_jobs: int = 20
     max_seconds: int = 900
     skip_recent_seconds: int = 60
     max_attempts_per_note_per_day: int = 3
+    max_cost_usd_per_day: float | None = None
+    max_tokens_per_day: int | None = None
     push: bool = True
 
 
