@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tiro import corrections, gate, journal, protocol, reflect
+from tiro import connect, corrections, gate, journal, protocol, reflect
 from tiro import index as folder_index
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
@@ -179,6 +179,10 @@ def apply_output(
         # Before the note is written, because the issue key is one of the
         # things being written. A failure here leaves the note untouched.
         output = _dispatch(config, job, output, run_id=run_id, note_id=note_id)
+    elif job.verb == "connect":
+        # Every suggestion is checked against the vault before it is written;
+        # what cannot be checked is dropped and counted, never passed through.
+        output = connect.apply(config, job.rel, text, output, today=run_id[:10])
 
     if output.block.strip():
         text = protocol.upsert_block(text, job=job.verb, id=note_id, body=output.block)

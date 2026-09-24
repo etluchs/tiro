@@ -27,6 +27,7 @@ REQUIRED_TRUST = {
     "distill": "L2",
     "spec": "L2",
     "dispatch": "L2",
+    "connect": "L2",
 }
 MAY_MOVE = {"file"}
 

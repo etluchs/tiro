@@ -197,7 +197,9 @@ def _orphans(vault: Path) -> list[str]:
         if folder_index.is_index(text):
             indexes.add(rel)
             continue
-        for link in iter_links(text):
+        # Links in Tiro's blocks are proposals, not the user's links: a
+        # `connect` block that names an orphan has not un-orphaned it.
+        for link in iter_links(protocol.strip_blocks(text)):
             target = index.resolve(link.target, from_rel=rel)
             if target and target != rel:
                 linked.add(target)
