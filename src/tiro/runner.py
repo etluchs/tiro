@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tiro import corrections, gate, journal, protocol, reflect
+from tiro import index as folder_index
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
 from tiro.failure import is_machine
@@ -657,6 +658,26 @@ def once(
                     f"proposes **{p.id}**: {p.title}, from {len(p.corrections)} "
                     f"corrections — see [[Tiro/Proposals]]; `tiro accept {p.id}` "
                     f"or `tiro reject {p.id} \"why\"`")
+
+        # Folder indexes, after the jobs so a note filed this run is listed
+        # this run. No model time: it is a directory listing. One commit per
+        # index, so each can be reverted alone.
+        said = state.setdefault("index", {}).setdefault("said", {})
+        for o in folder_index.run(config, state, today=today, now=now):
+            if o.what in ("created", "updated"):
+                git.commit([o.note], f"tiro(index): {o.folder}/",
+                           {"Tiro-Run": run_id, "Tiro-Job": "index", "Tiro-Note": o.note})
+                record.note_line(f"{o.what} the index of `{o.folder}/`: [[{_link(o.note)}]]")
+                said.pop(o.note, None)
+            elif o.what == "declined":
+                record.note_line(f"will not recreate the index of `{o.folder}/` — {o.detail}")
+            elif o.what == "skipped" and o.detail != "you are editing it":
+                # Said once, and again only if the reason changes: a folder
+                # that is L1 would otherwise say so every hour.
+                if said.get(o.note) != o.detail:
+                    said[o.note] = o.detail
+                    record.note_line(f"no index for `{o.folder}/` — {o.detail}")
+        _save_state(config, state)
 
         journal.write_questions(config)
 

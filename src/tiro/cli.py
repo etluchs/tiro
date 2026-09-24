@@ -213,6 +213,26 @@ def cmd_reflect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    """Bring the folder indexes up to date now, as the next run would."""
+    from tiro import index
+
+    config = _config(args)
+    if not config.index.folders:
+        print("no folders to index: list them under [index] in tiro.toml")
+        return 0
+    with run_lock(config.tiro_dir / "lock"):
+        state = runner._load_state(config)
+        outcomes = index.run(config, state, today=_today())
+        runner._save_state(config, state)
+        for o in outcomes:
+            if o.what in ("created", "updated"):
+                _commit_ours(config, f"tiro(index): {o.folder}/", "index", [o.note])
+    for o in outcomes:
+        print(f"{o.what:9} {o.note}" + (f" — {o.detail}" if o.detail else ""))
+    return 0
+
+
 def cmd_accept(args: argparse.Namespace) -> int:
     """Append a proposed rule to `.tiro/rules.md`. The only way Tiro's
     proposals reach that file, and the commit says so."""
@@ -364,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("reflect", help="read the correction log and propose rules").set_defaults(
         fn=cmd_reflect)
+    sub.add_parser("index", help="bring the folder indexes up to date").set_defaults(
+        fn=cmd_index)
     accept = sub.add_parser("accept", help="add a proposed rule to .tiro/rules.md")
     accept.add_argument("rule_id", help="e.g. R-019")
     accept.set_defaults(fn=cmd_accept)
