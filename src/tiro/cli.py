@@ -17,7 +17,7 @@ from pathlib import Path
 from tiro import journal, lint, ops as ops_mod, protocol, runner, scan
 from tiro.config import TRUST_MEANING, Config, ConfigError
 from tiro.jira import Acli
-from tiro.vcs import Git, LockBusy
+from tiro.vcs import Git, LockBusy, run_lock
 
 
 def _config(args: argparse.Namespace) -> Config:
@@ -172,6 +172,82 @@ def cmd_adopt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _today() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _commit_ours(config: Config, message: str, job: str, paths: list[str]) -> str | None:
+    """Commit Tiro's own files after a command, under a trailer like a run's."""
+    git = Git(config.vault)
+    if not git.is_repo():
+        return None
+    return git.commit(paths, message, {"Tiro-Job": job})
+
+
+def cmd_reflect(args: argparse.Namespace) -> int:
+    """Read the correction log now, rather than waiting for the weekly run."""
+    from tiro import reflect
+
+    config = _config(args)
+    today = _today()
+    with run_lock(config.tiro_dir / "lock"):
+        report = reflect.reflect(config, today=today)
+        state = runner._load_state(config)
+        reflect.mark_done(state, today)
+        runner._save_state(config, state)
+        _commit_ours(config, "tiro(reflect): read the correction log", "reflect",
+                     ["Tiro/Proposals.md", ".tiro/proposals", ".tiro/state.json"])
+    for p in report.new:
+        print(f"proposes {p.id}: {p.title} ({len(p.corrections)} corrections)")
+    for d, n_for, n_against in report.held_back:
+        print(f"held back {reflect.label(d.src)} -> {reflect.label(d.dst)}: "
+              f"{n_for} for, {n_against} against")
+    for d, n in report.below_threshold:
+        print(f"waiting   {reflect.label(d.src)} -> {reflect.label(d.dst)}: "
+              f"{n} of {config.reflect.threshold}")
+    if not (report.new or report.held_back or report.below_threshold):
+        print("nothing to propose: no filing corrections in the log yet")
+    print("see Tiro/Proposals.md")
+    return 0
+
+
+def cmd_accept(args: argparse.Namespace) -> int:
+    """Append a proposed rule to `.tiro/rules.md`. The only way Tiro's
+    proposals reach that file, and the commit says so."""
+    from tiro import reflect
+
+    config = _config(args)
+    with run_lock(config.tiro_dir / "lock"):
+        try:
+            p = reflect.accept(config, args.rule_id, today=_today())
+        except (KeyError, ValueError) as exc:
+            print(exc.args[0] if exc.args else exc)
+            return 1
+        _commit_ours(config, f"tiro accept {p.id}: {p.title}", "accept",
+                     [".tiro/rules.md", ".tiro/proposals", "Tiro/Proposals.md"])
+    print(f"accepted {p.id} — it is in .tiro/rules.md, and the next triage reads it")
+    return 0
+
+
+def cmd_reject(args: argparse.Namespace) -> int:
+    """Turn a proposal down, with a reason. It is never proposed again."""
+    from tiro import reflect
+
+    config = _config(args)
+    with run_lock(config.tiro_dir / "lock"):
+        try:
+            p = reflect.reject(config, args.rule_id, args.reason, today=_today())
+        except (KeyError, ValueError) as exc:
+            print(exc.args[0] if exc.args else exc)
+            return 1
+        _commit_ours(config, f"tiro reject {p.id}: {p.reason}", "reject",
+                     [".tiro/proposals", "Tiro/Proposals.md"])
+    print(f"rejected {p.id}; it will not be proposed again")
+    return 0
+
+
 def cmd_undo(args: argparse.Namespace) -> int:
     """Revert every commit from a run, newest first."""
     config = _config(args)
@@ -285,6 +361,16 @@ def build_parser() -> argparse.ArgumentParser:
     adopt = sub.add_parser("adopt", help="survey the vault and draft rules.md and trust.toml")
     adopt.add_argument("--dry-run", action="store_true", help="print the survey, write nothing")
     adopt.set_defaults(fn=cmd_adopt)
+
+    sub.add_parser("reflect", help="read the correction log and propose rules").set_defaults(
+        fn=cmd_reflect)
+    accept = sub.add_parser("accept", help="add a proposed rule to .tiro/rules.md")
+    accept.add_argument("rule_id", help="e.g. R-019")
+    accept.set_defaults(fn=cmd_accept)
+    reject = sub.add_parser("reject", help="turn a proposed rule down, with a reason")
+    reject.add_argument("rule_id", help="e.g. R-019")
+    reject.add_argument("reason", help="why; kept with the proposal")
+    reject.set_defaults(fn=cmd_reject)
 
     undo = sub.add_parser("undo", help="revert a run")
     undo.add_argument("run_id")

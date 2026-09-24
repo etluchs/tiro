@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tiro import corrections, gate, journal, protocol
+from tiro import corrections, gate, journal, protocol, reflect
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
 from tiro.failure import is_machine
@@ -644,6 +644,19 @@ def once(
             # still have spent what it spent as far as tomorrow is concerned.
             record_spend(state, day, outcome.usage)
             _save_state(config, state)
+
+        # Weekly, and after the jobs so this run's own corrections are in the
+        # log. No model time: it is counting.
+        today = run_id[:10]
+        if reflect.due(config, state, today):
+            report = reflect.reflect(config, today=today)
+            reflect.mark_done(state, today)
+            _save_state(config, state)
+            for p in report.new:
+                record.note_line(
+                    f"proposes **{p.id}**: {p.title}, from {len(p.corrections)} "
+                    f"corrections — see [[Tiro/Proposals]]; `tiro accept {p.id}` "
+                    f"or `tiro reject {p.id} \"why\"`")
 
         journal.write_questions(config)
 
