@@ -18,9 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from tiro.failure import MachineFailure
+
 
 class OpsUnavailable(Exception):
     """This backend cannot do that. Never a reason to do it some other way."""
+
+
+class OpsDown(OpsUnavailable, MachineFailure):
+    """The Obsidian CLI is not there to ask — the app is closed, or it did not
+    answer. The same job will work once it is running again."""
 
 
 @dataclass(frozen=True)
@@ -127,11 +134,11 @@ def for_vault(vault: Path, *, backend: str = "auto", timeout: float = 5.0) -> Va
     if backend == "cli":
         probe = probe_obsidian(timeout)
         if not probe.usable:
-            raise OpsUnavailable(f"obsidian CLI required but unusable: {probe.detail}")
+            raise OpsDown(f"obsidian CLI required but unusable: {probe.detail}")
         cli = ObsidianCliOps(vault)
         answers, why = cli.answers_queries()
         if not answers:
-            raise OpsUnavailable(f"obsidian CLI required but not answering: {why}")
+            raise OpsDown(f"obsidian CLI required but not answering: {why}")
         return cli
     if not obsidian_is_running():
         return FilesystemOps(vault)

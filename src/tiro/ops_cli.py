@@ -31,7 +31,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from tiro.ops import BrokenLink, OpsUnavailable
+from tiro.ops import BrokenLink, OpsDown
 
 TIMEOUT = 30.0
 
@@ -130,7 +130,7 @@ class ObsidianCliOps:
     def _list_of_notes(self, command: str) -> list[str]:
         res = self.run(command)
         if not res.ok:
-            raise OpsUnavailable(f"obsidian {command}: {res.err or res.out}".strip())
+            raise OpsDown(f"obsidian {command}: {res.err or res.out}".strip())
         return sorted(_paths(res.parsed if res.parsed is not None else res.out))
 
     # -- interface --------------------------------------------------------
@@ -141,7 +141,7 @@ class ObsidianCliOps:
     def unresolved(self) -> list[BrokenLink]:
         res = self.run("unresolved")
         if not res.ok:
-            raise OpsUnavailable(f"obsidian unresolved: {res.err or res.out}".strip())
+            raise OpsDown(f"obsidian unresolved: {res.err or res.out}".strip())
         out: list[BrokenLink] = []
         if isinstance(res.parsed, list):
             for item in res.parsed:
@@ -170,7 +170,7 @@ class ObsidianCliOps:
     def backlinks(self, rel: str) -> list[str]:
         res = self.run("backlinks", path=rel)
         if not res.ok:
-            raise OpsUnavailable(f"obsidian backlinks: {res.err or res.out}".strip())
+            raise OpsDown(f"obsidian backlinks: {res.err or res.out}".strip())
         return sorted(_paths(res.parsed if res.parsed is not None else res.out))
 
     def move(self, src_rel: str, dst_rel: str) -> None:
@@ -182,11 +182,11 @@ class ObsidianCliOps:
         """
         res = self.run("move", src=src_rel, dst=dst_rel)
         if not (self.vault / dst_rel).exists():
-            raise OpsUnavailable(
+            raise OpsDown(
                 f"obsidian move did not produce {dst_rel}: {res.err or res.out}".strip()
             )
         if (self.vault / src_rel).exists():
-            raise OpsUnavailable(f"obsidian move left {src_rel} in place")
+            raise OpsDown(f"obsidian move left {src_rel} in place")
 
 
 #: Lines Obsidian prints to stdout that are not the answer: its startup log

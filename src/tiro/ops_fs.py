@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tiro.links import Index, iter_links
-from tiro.ops import BrokenLink, OpsUnavailable
+from tiro.ops import BrokenLink, OpsDown
 
 
 class FilesystemOps:
@@ -63,7 +63,9 @@ class FilesystemOps:
         # Moving without rewriting inbound links breaks the graph silently, and
         # rewriting them correctly means reimplementing Obsidian's resolution
         # rules. Iteration 1 declines to do either (DESIGN section 3.4).
-        raise OpsUnavailable(
+        # Obsidian closed is the machine's state, not the note's: the move will
+        # work on the first run after it is open again.
+        raise OpsDown(
             "moving a note needs the Obsidian CLI, so that Obsidian rewrites "
             "the inbound links itself"
         )

@@ -19,6 +19,7 @@ from pathlib import Path
 from tiro import corrections, gate, journal, protocol
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config
+from tiro.failure import is_machine
 from tiro.jira import Acli, JiraError, build_payload, note_label
 from tiro.links import Index
 from tiro.ops import OpsUnavailable, VaultOps
@@ -404,10 +405,11 @@ def execute_job(
         # written and not committed; put back what Tiro changed, say so on the
         # note and in the journal, and let the run go on to the next job.
         undo.undo()
+        retry = is_machine(exc)
         detail = f"unexpected failure: {type(exc).__name__}: {exc}"
-        _block_note(config, job, detail, run_id)
+        _block_note(config, job, detail, run_id, retry=retry)
         _commit_block(git, job, run_id)
-        return Outcome("blocked", detail)
+        return Outcome("blocked", detail + (" — retries by itself" if retry else ""))
 
 
 def _execute(
@@ -461,9 +463,10 @@ def _execute(
         return Outcome("skipped", "the user edited the note while we worked on it")
     except (AgentError, OpsUnavailable, JiraError) as exc:
         undo.undo()
-        _block_note(config, job, str(exc), run_id)
+        retry = is_machine(exc)
+        _block_note(config, job, str(exc), run_id, retry=retry)
         _commit_block(git, job, run_id)
-        return Outcome("blocked", str(exc))
+        return Outcome("blocked", str(exc) + (" — retries by itself" if retry else ""))
 
     result = gate.check(
         config, git, ops,
@@ -535,19 +538,32 @@ def _render_skill(config: Config, job: Job, text: str) -> str:
     )
 
 
-def _block_note(config: Config, job: Job, why: str, run_id: str) -> None:
+def _block_note(config: Config, job: Job, why: str, run_id: str, *,
+                retry: bool = False) -> None:
+    """Say on the note why the job could not finish.
+
+    ``retry`` is for a failure of the machine rather than the material
+    (``failure.py``). The hash is then not recorded, so the note still needs
+    work and the next run picks it up by itself — the attempts cap stops that
+    becoming a loop. Any hash already there is left: it was of older content,
+    so it cannot match and cannot stop the retry.
+    """
     note = config.vault / job.rel
     if not note.exists():
         return
     text = note.read_text(encoding="utf-8")
     text, note_id = protocol.ensure_id(text)
-    text = protocol.upsert_block(
-        text, job=job.verb, id=note_id,
-        body=f"> [!failure] Tiro · {job.verb} · blocked\n> {why}",
-    )
+    if retry:
+        body = (f"> [!warning] Tiro · {job.verb} · will retry\n> {why}\n>\n"
+                "> This is the machine, not the note: nothing for you to do. "
+                "Tiro tries again on its next run.")
+    else:
+        body = f"> [!failure] Tiro · {job.verb} · blocked\n> {why}"
+    text = protocol.upsert_block(text, job=job.verb, id=note_id, body=body)
     text = protocol.set_key(text, "tiro/status", "blocked")
     text = protocol.set_key(text, "tiro/run", run_id)
-    text = protocol.set_key(text, "tiro/hash", protocol.user_hash(text))
+    if not retry:
+        text = protocol.set_key(text, "tiro/hash", protocol.user_hash(text))
     _atomic_write(note, text)
 
 
