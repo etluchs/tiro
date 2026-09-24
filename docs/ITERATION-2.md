@@ -14,11 +14,14 @@ the design that makes Tiro more than a skill pack.
 
 Design rationale: [DESIGN.md](DESIGN.md) §7. What shipped: [ITERATION-1](ITERATION-1.md).
 
-## M0 is done
+## Where it stands — 2026-09-24
 
-The correction log landed on 2026-09-22, before the week of unattended running
-rather than after it, so `reflect` will have evidence to read. The rest of this
-plan stands as written.
+Everything that can be built is built: M0, M2, M3, M4 and M5, and `connect`,
+which was moved in from iteration 3 at the user's request (see M7). **What is
+left is the user's:** M1 needs a real Jira site and a real spec, and M6 is a
+week of living with it. Neither can be done by writing code, and until both
+have happened iteration 1's criteria 7 and 8 and this plan's criteria 1 and 4
+cannot be judged.
 
 ## What ships
 
@@ -32,7 +35,7 @@ plan stands as written.
 | **Retry after a machine failure** | a note blocked by a dead network retries itself | Found in use: an environmental block is indistinguishable from a real one and needs hand-editing |
 | **A week of real running** | M7 from iteration 1, actually lived | The point of iteration 1, still outstanding |
 
-**Not in iteration 2:** `connect` (DESIGN §8 puts it in 3), `watch` mode,
+**Not in iteration 2:** `watch` mode,
 `tiro chat`, notifications, embeddings, Jira read-back, any dispatch target
 beyond Jira.
 
@@ -61,7 +64,7 @@ acceptance criterion below says the log must be honest before it is useful.
   question is the one only time answers — whether a week of ordinary editing
   produces a clean log.
 
-### M1 — dispatch, live (½ day)
+### M1 — dispatch, live (½ day) — **the user's**
 Nothing to build; everything to verify. Flip `dispatch.live`, file one real
 issue from a real spec, and check the crash window against the live instance
 rather than a stub.
@@ -69,7 +72,7 @@ rather than a stub.
   note creates nothing; `labels = tiro` returns exactly what was dispatched;
   and iteration 1's criterion 7 can finally be judged.
 
-### M2 — `reflect` (2 days)
+### M2 — `reflect` (2 days) — **done, 2026-09-24**
 Weekly job. Reads `corrections.jsonl`, groups by direction, and where three
 consistent corrections agree writes a proposal to `.tiro/proposals/`, an entry
 in `Tiro/Proposals.md`, and a line in the journal. Never edits `rules.md`.
@@ -82,16 +85,27 @@ proposal so the choice can be revisited from evidence.
   proposal naming them; two do not; corrections in opposing directions produce
   none; and the proposal is legible enough that accepting it needs no thought
   about what it means.
+- **Shipped:** weekly from the run, or now with `tiro reflect`. A direction is
+  Tiro's folder → the user's folder, one per note however often it was moved;
+  a rename within a folder is not one. A direction with any evidence against
+  it is held back and shown, not proposed. A proposal naming a folder that an
+  existing rule also names says "read with R-00x". The threshold is
+  `[reflect] threshold`, default 3, and is recorded on every proposal.
+  Deleted blocks are counted on the board and make no rule: a deletion says
+  "not this", never "instead that".
 
-### M3 — `accept` and `reject` (½ day)
+### M3 — `accept` and `reject` (½ day) — **done, 2026-09-24**
 `tiro accept R-019` appends the rule to `.tiro/rules.md` with its date and
 provenance. `tiro reject R-019 "reason"` records the reason so the same
 proposal is never made twice. Both are promised in ITERATION-1's CLI table and
 neither exists.
 - **Done when:** an accepted rule is in `rules.md` with provenance and changes
   the next `triage`'s reasoning; a rejected one is never proposed again.
+- **Shipped:** as specified. `reject` refuses without a reason. The commit for
+  an accept is `tiro accept R-00x: <title>` and is the only commit that touches
+  `rules.md`; a test checks that over the history, the way criterion 2 will.
 
-### M4 — Retry after a machine failure (½ day)
+### M4 — Retry after a machine failure (½ day) — **done, 2026-09-24**
 A note blocked because the SDK was missing, the network was down or a token
 expired is indistinguishable from one blocked because Tiro could not do the
 work. Both get a hash and both need hand-editing before anything retries. Found
@@ -103,8 +117,12 @@ cap already stops a loop.
 - **Done when:** a note blocked by a missing dependency runs by itself after
   the dependency is installed, with no edit; a note blocked because the agent
   could not do the job does not.
+- **Shipped:** a failure is the machine's if it is `AgentUnavailable`,
+  `OpsDown`, `JiraDown`, or a connection, timeout or OS error; everything else,
+  a bug included, is about the job. The note says "will retry" and carries no
+  hash. Obsidian being closed during a night-time `file` is the common case.
 
-### M5 — `index` (2 days)
+### M5 — `index` (2 days) — **done, 2026-09-24**
 Maintain a Map of Content per area: a note listing what is in a folder, grouped,
 with one line each. Rebuild it when the folder's contents change.
 
@@ -115,12 +133,41 @@ relationships it cannot justify from the filesystem.
 - **Done when:** `uzh/` has an index that the user would not rewrite; running
   twice changes nothing; adding a note to the folder updates it on the next run
   and the diff is one line.
+- **Shipped:** folders listed under `[index] folders` in `tiro.toml`; the note
+  is `<folder>/<name> — Index.md` and carries `tiro/index`. One line per note
+  with its own first line (a heading that repeats the filename is skipped),
+  subfolders under their own heading, daily notes counted rather than listed.
+  No model. Created only where the folder is L3, updated wherever one exists,
+  and never recreated once the user deletes it. Each index is its own commit.
+  Lint ignores indexes, so the orphan count does not collapse the day one
+  appears. `uzh/` is the user's to judge: add it to `[index]`.
 
-### M6 — The week (ongoing, from day one)
+### M6 — The week (ongoing, from day one) — **the user's**
 Iteration 1's M7, unchanged and still owed. Half-hourly timer, daily journal
 read, tune budgets and rules.
 - **Done when:** seven consecutive days with no manual git intervention, no
   note stuck in `working`, and nothing reverted.
+
+### M7 — `connect` — **done, 2026-09-24**, moved in from iteration 3
+Added at the user's request, against this plan's own advice below. The advice
+still stands as a description of the risk; what changed is that the risk is
+now handled in code rather than by leaving the feature out:
+
+- **Asked for per note** with `tiro: connect`. No sweep, no schedule.
+- **Evidence the runner checks.** Every suggestion carries a verbatim passage
+  from this note and one from the target, 20–300 characters each. Both are
+  looked for in the user's own text, outside Tiro's blocks. A passage that is
+  not there drops the suggestion.
+- **Only real, new, quotable targets.** The target must resolve to a note, not
+  this one, not already linked, not in an L0 folder.
+- **Few.** At most five links and three contradictions.
+- **The runner writes the block**, from what survived, and says how many were
+  dropped. The agent's own block and keys are discarded. Quotations are
+  written as text, so a link inside one cannot break.
+- **Proposals, not edits.** Lint does not count a proposed link as a link.
+- **Done when:** the user has run it on ten notes and kept at least one link in
+  half of them. If most runs drop most suggestions, the prompt is wrong; if the
+  user keeps none, the feature is, and it goes back to iteration 3.
 
 **Estimate: ~6 focused days**, plus the week running alongside.
 
@@ -152,9 +199,10 @@ judged, which is the point. Four more:
 
 ## What this plan deliberately leaves alone
 
-**`connect`.** Proposing links between notes is the feature most likely to
-produce plausible nonsense at volume, and this vault's 125 links mean there is
-no baseline to judge good suggestions against. It waits for `index`.
+**`connect`** — *overtaken: built as M7 at the user's request.* Proposing
+links between notes is the feature most likely to produce plausible nonsense at
+volume, and this vault's 125 links mean there is no baseline to judge good
+suggestions against. That is why M7 checks every quotation and caps the count.
 
 **`tiro chat`.** The async-via-notes channel is the one that works when the
 user is asleep, and it is the one to get right. A synchronous channel is a

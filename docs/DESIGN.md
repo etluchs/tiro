@@ -608,9 +608,9 @@ A closed vocabulary. Each verb is one skill, one budget, one declared path scope
 | `spec` | L3 | Turn a tagged note into a well-formed spec note — problem, context, acceptance criteria, non-goals, open questions — and mark it `needs-input` for the user to sign off | 1 |
 | `dispatch` | L3 | Take a signed-off spec and create **one Jira issue** from it, under the rules in §5.5. Writes the issue key and URL back into the note. Create only. Other targets (GitLab, a seeded repo with `SPEC.md`) come later, behind the same seam | 1 |
 | `lint` | L0 | Whole-vault health: broken links, orphans, frontmatter violations, duplicate titles, notes stuck in the inbox. Read-only report to `Tiro/Health.md` | 1 |
-| `reflect` | L2 | Weekly: read the correction log, propose rule changes (§7) | 2 |
-| `index` | L3 | Maintain Maps of Content / index notes for an area as its contents change | 2 |
-| `connect` | L2 | Propose links between notes that should know about each other; surface contradictions between notes | 3 |
+| `reflect` | L2 | Weekly: read the correction log, propose rule changes (§7). Counting, no model; only `tiro accept` edits `rules.md` | 2 |
+| `index` | L3 | Maintain Maps of Content / index notes for an area as its contents change. No model: a listing, one line per note. Created only at L3, updated wherever one exists, never recreated once deleted | 2 |
+| `connect` | L2 | Propose links between notes that should know about each other; surface contradictions between notes. Per note, on request. Every suggestion carries a verbatim passage from both notes, which the runner finds or drops; at most five links and three contradictions; the runner writes the block | 2 (planned for 3; moved in at the user's request, with those checks as the condition) |
 
 **Where this goes next.** The README's ambition is notes turning into "actionable
 items for fellow agents to work on", and on Jira Cloud that last step is

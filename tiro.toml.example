@@ -38,6 +38,19 @@ max_searches = 8
 inbox = "/"
 stale_days = 30
 
+[reflect]
+# How many notes corrected the same way before Tiro proposes a rule, and how
+# often it looks. Recorded on every proposal, so the choice can be revisited.
+threshold = 3
+every_days = 7
+
+[index]
+# Folders that get a Map of Content, rebuilt when their contents change.
+# Created only where the folder is L3 in trust.toml; kept up to date wherever
+# one exists. Delete one and Tiro will not make it again.
+# folders = ["uzh", "Areas"]
+note = "{name} — Index"
+
 [dispatch]
 # Jira Cloud, posted through acli under the user's own account (DESIGN §5.5).
 site = "example.atlassian.net"
