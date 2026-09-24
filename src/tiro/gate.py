@@ -138,7 +138,9 @@ def snapshot(config: Config, git: Git, ops: VaultOps, note_rel: str) -> Snapshot
     note = config.vault / note_rel
     return Snapshot(
         head=git.head(),
-        dirty=tuple(git.dirty_paths()),
+        # The job's own note is always judged, even when it was already dirty:
+        # it is the one file Tiro certainly writes.
+        dirty=tuple(p for p in git.dirty_paths() if p != note_rel),
         broken=_broken_set(ops.unresolved()),
         note_mtime=note.stat().st_mtime if note.exists() else 0.0,
     )
@@ -249,9 +251,3 @@ def check(
 
     return result
 
-
-def rollback(git: Git, declared: list[str], created: list[str] | None = None) -> None:
-    """Undo a job. ``created`` names paths Tiro itself made this run — only
-    those may be removed; everything else is merely restored."""
-    git.discard(created or [])
-    git.restore(declared)

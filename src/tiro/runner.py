@@ -23,6 +23,7 @@ from tiro.jira import Acli, JiraError, build_payload, note_label
 from tiro.links import Index
 from tiro.ops import OpsUnavailable, VaultOps
 from tiro.scan import Job, iter_notes, scan
+from tiro.undo import Undo
 from tiro.vcs import Git, LockBusy, run_lock
 
 
@@ -145,6 +146,7 @@ def apply_output(
     created_dirs: list[Path] | None = None,
     rewritten: set[str] | None = None,
     wrote_block: list[str] | None = None,
+    undo: Undo | None = None,
 ) -> tuple[list[str], tuple[str, str] | None]:
     """Serialise the agent's result into the note. Returns (declared, moved).
 
@@ -152,8 +154,10 @@ def apply_output(
     so every byte Tiro adds goes through here and looks the same everywhere.
 
     ``created_dirs``, if given, collects directories made for a move, so that a
-    gate failure can take them away again along with the moved copy.
+    gate failure can take them away again along with the moved copy. Every file
+    this writes, or that the move changes, is recorded in ``undo``.
     """
+    undo = Undo(config.vault) if undo is None else undo
     note = config.vault / job.rel
     text = note.read_text(encoding="utf-8")
 
@@ -187,7 +191,7 @@ def apply_output(
     # affect it.
     text = protocol.set_key(text, "tiro/hash", protocol.user_hash(text))
 
-    _atomic_write(note, text)
+    undo.write(job.rel, text)
     declared = [job.rel]
     moved: tuple[str, str] | None = None
     created_dirs = [] if created_dirs is None else created_dirs
@@ -237,6 +241,10 @@ def apply_output(
         # backend: it is the same resolver the gate compares links with, and it
         # does not depend on a CLI command that has never run.
         relinked = sorted(Index(config.vault).backlinks(job.rel))
+        # Everything the move is about to change, as it is now: the note, the
+        # place it is going, and every note whose link Obsidian will rewrite.
+        for rel in (destination, *relinked):
+            undo.track(rel)
         made = _mkdirs(config.vault, (config.vault / destination).parent)
         try:
             ops.move(job.rel, destination)
@@ -247,6 +255,8 @@ def apply_output(
                 (config.vault / destination).unlink()
             _rmdirs(made)
             raise
+        for rel in (job.rel, destination, *relinked):
+            undo.settle(rel)
         declared.append(destination)
         declared.extend(relinked)
         rewritten.update(relinked)
@@ -259,8 +269,7 @@ def apply_output(
         # here and the user never agreed", and only a record of the former
         # separates them.
         moved_text = (config.vault / destination).read_text(encoding="utf-8")
-        _atomic_write(config.vault / destination,
-                      protocol.set_key(moved_text, "tiro/filed", destination))
+        undo.write(destination, protocol.set_key(moved_text, "tiro/filed", destination))
 
     return declared, moved
 
@@ -387,13 +396,14 @@ def execute_job(
         _commit_block(git, job, run_id)
         return Outcome("blocked", f"unknown verb `{job.verb}`")
 
+    undo = Undo(config.vault)
     try:
-        return _execute(config, git, ops, agent, job, run_id=run_id)
+        return _execute(config, git, ops, agent, job, run_id=run_id, undo=undo)
     except Exception as exc:  # noqa: BLE001 - the last line of never #4
         # Anything the handlers below did not expect. The note may have been
-        # written and not committed; put it back, say so on it and in the
-        # journal, and let the run go on to the next job.
-        git.restore([job.rel])
+        # written and not committed; put back what Tiro changed, say so on the
+        # note and in the journal, and let the run go on to the next job.
+        undo.undo()
         detail = f"unexpected failure: {type(exc).__name__}: {exc}"
         _block_note(config, job, detail, run_id)
         _commit_block(git, job, run_id)
@@ -408,13 +418,13 @@ def _execute(
     job: Job,
     *,
     run_id: str,
+    undo: Undo,
 ) -> Outcome:
     note = config.vault / job.rel
-    before = gate.snapshot(config, git, ops, job.rel)
     text = note.read_text(encoding="utf-8")
     baseline_mtime = note.stat().st_mtime
-    _atomic_write(note, protocol.set_key(text, "tiro/status", "working"),
-                  keep_mtime=baseline_mtime)
+    undo.write(job.rel, protocol.set_key(text, "tiro/status", "working"),
+               keep_mtime=baseline_mtime)
 
     request = JobRequest(
         verb=job.verb,
@@ -432,15 +442,25 @@ def _execute(
     wrote_block: list[str] = []
     try:
         output = agent.run(request)
+        # The gate's "before" is taken now, not when the job started. The agent
+        # holds no write tools, so nothing that changes while it thinks is
+        # Tiro's doing — it is the user, working in Obsidian. Snapshotting at the
+        # start blamed every such edit on the job, blocked it, and (when rollback
+        # still meant `git checkout`) reverted the user's edit.
+        before = gate.snapshot(config, git, ops, job.rel)
         declared, moved = apply_output(
             config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime,
             created_dirs=created_dirs, rewritten=rewritten, wrote_block=wrote_block,
+            undo=undo,
         )
     except _NoteMovedUnderUs:
-        git.restore([job.rel])
+        # The user is typing in this note. Undo leaves it alone, since it is no
+        # longer as Tiro left it; the next run finds it `working`, resets it and
+        # tries again.
+        undo.undo()
         return Outcome("skipped", "the user edited the note while we worked on it")
     except (AgentError, OpsUnavailable, JiraError) as exc:
-        git.restore([job.rel])
+        undo.undo()
         _block_note(config, job, str(exc), run_id)
         _commit_block(git, job, run_id)
         return Outcome("blocked", str(exc))
@@ -451,14 +471,21 @@ def _execute(
         before=before, moved=moved, rewritten=rewritten,
     )
     if not result.ok:
-        # Everything the job touched, not only what it declared: an undeclared
-        # change is exactly the case where leaving it in place does damage.
-        gate.rollback(git, declared + result.changed,
-                      created=[moved[1]] if moved else [])
+        # Put back what Tiro changed and nothing else. A path the job did not
+        # declare changed while Tiro was writing: that may be Obsidian, or the
+        # user saving, and the two cannot be told apart — so it is named here
+        # and left exactly as it is. A stale link can be fixed; lost prose
+        # cannot.
+        left = undo.undo()
         _rmdirs(created_dirs)
-        _block_note(config, job, "; ".join(result.failures), run_id)
+        untouched = sorted(set(left) | {p for p in result.changed if p not in declared})
+        why = "; ".join(result.failures)
+        if untouched:
+            why += ("; left as found, because Tiro cannot tell its own change "
+                    "from yours: " + ", ".join(untouched))
+        _block_note(config, job, why, run_id)
         _commit_block(git, job, run_id)
-        return Outcome("blocked", "gate: " + "; ".join(result.failures))
+        return Outcome("blocked", "gate: " + why)
 
     outcome_name = "preview" if (job.verb == "dispatch" and not config.dispatch.live) else output.status
     summary = output.detail or f"{job.verb} {job.rel}"

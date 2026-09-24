@@ -158,7 +158,7 @@ pre-approved rather than prompt — there is nobody to prompt), `max_turns`, and
 tool surface.
 
 **Tiro reimplements nothing it can delegate.** Three vendor tools own semantics
-we should not be re-deriving: `git` owns history and rollback, `obsidian` owns
+we should not be re-deriving: `git` owns history and revert, `obsidian` owns
 link resolution and moves (§3.4), and `acli` — Atlassian's CLI, which belongs in
 the dev image regardless — owns Jira auth and the REST surface (§5.5). All three
 are called by the **runner**, never exposed to the agent: the agent holds no
@@ -258,7 +258,9 @@ acquire lock (.tiro/lock, pid + start time, stale after 30 min)
           note's mtime unchanged since we read it   ← user edited? skip, retry next run
         ──────────────────────────────────────────────────────
         pass → git commit (one commit, trailers: Tiro-Run, Tiro-Job, Tiro-Note)
-        fail → git checkout -- <declared paths>; mark blocked; journal why
+        fail → undo what Tiro wrote, from its own before/after record — never
+               HEAD, which lacks the user's uncommitted edits; mark blocked;
+               journal why (rules/safety.md)
   └─ write journal entry, Questions.md, run.json (jobs, durations, tokens, cost)
   └─ git push
 release lock

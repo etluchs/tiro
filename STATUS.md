@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **164 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault. **172 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -58,10 +58,10 @@ Obsidian moves a linked note it rewrites the link in every note that pointed at
 it, and those notes are not in the job's declared paths. That is now handled —
 the backlinks are computed before the move, declared, and judged at the move's
 permission rather than the write rule's, since a link rewrite is a consequence
-of a move the user authorised rather than Tiro editing someone's prose. And a
-gate failure now rolls back everything the job touched, not only what it
-declared, because an undeclared change is exactly the case where leaving it in
-place does damage. `backlinks` is the one adapter command still never run.
+of a move the user authorised rather than Tiro editing someone's prose. A
+failed move is undone file by file from Tiro's own record, including the links
+it predicted; a file nobody predicted is named and left alone (decision 5).
+`backlinks` is the one adapter command still never run.
 
 One limitation worth knowing: the CLI's `unresolved` JSON names the broken
 target but not the note holding it, so on that backend `lint` cannot say where
@@ -112,8 +112,18 @@ These were made while building and are not in the design doc:
    destination folder may be new.
 4. **The agent may not write `tiro`.** The verb is the user's key; if a skill
    could set it, `spec` could queue its own `dispatch`.
-5. **Rollback never deletes.** An untracked file may be a note the user wrote
-   five minutes ago and has not committed, and git cannot tell us which.
+5. **Undo puts back bytes, not HEAD, and only Tiro's.** Rollback used to be
+   `git checkout`, and HEAD lacks every edit the user has not committed — which,
+   with nothing in Obsidian committing for them, is most edits. A failed job
+   reverted the question they had just added; the guard that noticed them typing
+   threw the typing away; and an edit to another note during a job was restored
+   along with Tiro's work. Now each job records every file's bytes before and
+   after Tiro writes it (`undo.py`), and undo restores a file only if it is still
+   exactly as Tiro left it. Anything else has been touched since — by the user,
+   or by Obsidian in a way nobody predicted, and the two cannot be told apart —
+   so it is named in the note and left as found. The same record is why undo
+   can remove a file without breaking never #1: only one Tiro's record shows did
+   not exist before the job and nobody has touched since.
 6. **The root can be the inbox.** The trust key `"/"` names files directly in
    the vault root. Daily notes (`YYYY-MM-DD`) are a class: never filed, never
    stale, never orphans, and an empty one is the plugin's doing.

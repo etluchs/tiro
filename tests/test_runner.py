@@ -157,7 +157,17 @@ def test_a_note_edited_mid_job_is_left_alone_and_retried(ready, vault: Path) -> 
     entry = next(e for e in record.entries if e.note == NOTE)
     assert entry.outcome == "skipped"
     assert "the user edited" in entry.detail
-    assert "tiro/status" not in protocol.read_keys(path.read_text())
+    # This test used to assert only that Tiro's status key was gone, which it
+    # was — because rollback restored HEAD and took the user's typing with it.
+    # The typing is what matters. The `working` key Tiro wrote is inside the
+    # user's saved text now, so it stays until the next run resets it.
+    assert "the user types" in path.read_text()
+
+    _age(vault)
+    second = _run(ready, _agent(research=JobOutput(block="x", detail="d"),
+                                triage=JobOutput(block="y")))
+    assert next(e for e in second.entries if e.note == NOTE).outcome == "done"
+    assert "the user types" in path.read_text()
 
 
 # --- note content is data ------------------------------------------------
@@ -627,9 +637,14 @@ def test_filing_a_linked_note_survives_obsidians_link_rewrites(ready, vault: Pat
 
 
 def test_a_failed_move_puts_the_rewritten_links_back_too(ready, vault: Path) -> None:
-    """If the gate refuses after the move, every file the job touched goes
-    back — not only the ones it declared. Otherwise the note returns and the
-    rewritten links point at where it is not."""
+    """If the gate refuses after the move, the move is undone, and so is every
+    link rewrite Tiro knew the move would cause — otherwise the note returns and
+    the rewritten links point at where it is not.
+
+    A file that changed and that Tiro did *not* predict is left alone. It used
+    to be restored too, but "a file that changed during the job" includes the
+    user saving in Obsidian, and restoring it threw their edit away. Tiro cannot
+    tell the two apart, so it names the file and leaves it."""
     dst = "Tiro/target.md"
     src = _linked_pair(vault, dst)
     pointer = vault / "Areas/pointer.md"
@@ -651,6 +666,32 @@ def test_a_failed_move_puts_the_rewritten_links_back_too(ready, vault: Path) -> 
     entry = next(e for e in record.entries if e.note == src)
     assert entry.outcome == "blocked"
     assert "orphan" in entry.detail
-    assert pointer.read_text() == before          # the rewrite is undone
-    assert "clobbered" not in (vault / "Areas/orphan.md").read_text()
+    assert "left as found" in entry.detail
+    assert pointer.read_text() == before          # the predicted rewrite is undone
+    assert (vault / "Areas/orphan.md").read_text() == "clobbered\n"  # the rest is not
     assert (vault / src).exists() and not (vault / dst).exists()
+
+
+def test_filing_a_note_that_was_never_committed(ready, vault: Path) -> None:
+    """A note written in Obsidian is untracked until something commits it. Moving
+    it leaves a source path git has never heard of, and naming that path in
+    `git add` made the whole commit fail. The note was left moved, uncommitted,
+    and the job reported as blocked; the test that covered filing only looked
+    at where the note ended up, so it passed."""
+    rel, dst = "00 Inbox/brand-new.md", "Tiro/brand-new.md"
+    (vault / rel).write_text(f"---\ntiro: file\ntiro/filed-to: {dst}\n---\n\nnew\n",
+                             encoding="utf-8")
+    _age(vault)
+
+    class Moving(FilesystemOps):
+        def move(self, src: str, dst_rel: str) -> None:
+            (self.vault / dst_rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.vault / src).rename(self.vault / dst_rel)
+
+    record = runner.once(ready, agent=_agent(
+        file=JobOutput(keys={"tiro/filed-to": dst}, block="x", detail="filed"),
+        research=JobOutput(block="x"), triage=JobOutput(block="y")), ops=Moving(vault))
+
+    entry = next(e for e in record.entries if e.note == rel)
+    assert entry.outcome == "done", entry.detail
+    assert dst not in Git(vault).dirty_paths()  # committed, not left lying about
