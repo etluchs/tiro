@@ -1,0 +1,213 @@
+# Iteration 3 — plan
+
+Iterations 1 and 2 made Tiro safe and made it learn. Both assume the user
+arrives at a note knowing what they want done with it, and says so with a verb.
+
+**Use says otherwise.** A note is usually written in a hurry, or in the middle
+of something else. Choosing a verb means asking "what is this, where does it
+go, what does it relate to?", and that is the exact context switch Tiro exists
+to save. If the user has to remember `tiro: triage` and then come back to
+write `tiro: file`, most notes never get either word.
+
+**The goal of iteration 3 is that a note gets looked after without being asked
+for.** Tiro looks at every new or changed note in the places the user opens up
+and does what is obvious. Where it is unsure, it asks in the note, the same as
+now. The explicit protocol stays exactly as it is, for when the user *is*
+thinking about how the vault is organised.
+
+The safety argument is the one the user made: every action is one commit, has a
+line in the journal, and `tiro undo` reverses it from Tiro's own record. The
+things that cannot be undone that way (deleting a note, editing the user's
+prose, `dispatch`) stay out of reach.
+
+Design rationale: [DESIGN.md](DESIGN.md). Before this: [ITERATION-2](ITERATION-2.md).
+
+## The shape, in one paragraph
+
+A second trigger, not a new verb. The rule today is "act when `tiro:` is present
+and the note changed". Auto mode adds "or the note is in an auto folder and is
+new or changed since Tiro last saw it". For such a note **the runner** queues
+`triage`; the model never chooses the verb, so a sentence in a note still cannot
+start a job. If triage's proposal is obvious by a test the runner can check, the
+runner files the note in the same job. Otherwise the block stays as a proposal,
+and one word from the user (`tiro: file`) accepts it, as today.
+
+## Decisions
+
+These are made in the plan so the build does not have to make them silently.
+Each can be revisited; the ones marked **ask** want the user's word first.
+
+### 1. What auto mode does: triage, and the move when it is obvious
+
+Title, tags, related notes and a destination: triage already works all of these
+out, and the related notes answer "does this relate to something else?". What
+auto mode adds is doing the move itself.
+
+**Not** `research`, `distill`, `connect`, `spec` or `dispatch`. `research`
+costs money per note and brings in web content nobody asked for. `dispatch`
+cannot be undone. `spec` exists to be signed. `connect` is the feature most
+likely to produce plausible nonsense at volume. Triage may *suggest* one of
+them in its block ("reads like a question to look up — add `tiro: research`"),
+which is one word rather than a decision.
+
+### 2. When a move counts as obvious
+
+The move needs every one of these, and the runner checks each rather than
+taking the model's word:
+
+- The source folder is **L4**. This is what never #2 already says ("never move
+  outside an L4 folder without an explicit accept"), and `safety.md` has been
+  keeping L4 for "moves Tiro would initiate on its own — of which there are
+  none yet". Auto mode is that move. Setting `"/" = "L4"` in `trust.toml` is
+  the user saying yes to it in advance, once per folder.
+- The destination is **L3** and **already exists**. A new folder is a decision
+  about the vault's shape; Tiro proposes it and waits.
+- Triage returns `"obvious": true` with a `basis`: either a rule id from
+  `rules.md`, or **at least two notes already in the destination folder** that
+  are like this one. The runner checks that the rule exists, or that the notes
+  exist and are in that folder. A basis that does not check out makes the
+  proposal a proposal.
+- The note is not a daily note, has no `tiro:` verb, and is not in `Tiro/`.
+
+Anything short of that writes the proposal block and stops. A note that could
+go two ways gets a `> [!question]`, as triage does now.
+
+No constitution change is needed for any of this. `DESIGN.md` §1 ① ("move is
+gated behind a one-word accept") and `safety.md`'s "A move is two permissions"
+get a paragraph each saying that the accept can also be given in advance, per
+folder, by raising it to L4.
+
+### 3. Which notes: new or changed, settled, since the mode was switched on
+
+Without bounds, the first run triages 929 notes, two thirds of them a dormant
+Roam import, and spends the day's budget by 08:00.
+
+- **Folders.** `[auto] folders`, default `["/"]` (the loose notes at the vault
+  root). A folder not listed is left alone. L0 and L1 folders are left alone
+  whatever the list says.
+- **New since the switch.** `[auto] since` is a date written by `tiro auto on`.
+  A note untouched since then is never looked at. Nothing old gets swept.
+- **Settled.** The existing 60 seconds is tuned for "tag and walk away". A
+  capture written in bursts over half an hour would be triaged at every burst.
+  `[auto] settle_minutes`, default 30: a note is looked at once it has been
+  quiet that long.
+- **Changed.** Looked at again only if its user content changed since, and at
+  most once a day. A note already filed out of an auto folder is out of scope
+  by definition, so filed notes are not re-triaged.
+- **Explicit wins.** A note carrying `tiro:` follows the explicit protocol and
+  auto mode ignores it.
+- **Leave me alone.** `tiro: hold` on a note means auto mode never looks at it.
+  It is a value of the user's key, not a job, and it is never queued.
+- **Order and budget.** Explicit requests run first. Auto jobs take what is
+  left of the run, at most `[auto] max_per_run` (default 5), and count against
+  the same daily ceilings.
+
+### 4. Where "seen" lives: `.tiro/state.json`, until there is something to say
+
+Writing `tiro/hash`, `tiro/id` and `tiro/status` onto every note Tiro glances at
+gives every loose capture a frontmatter block the user did not ask for. So the
+record of "looked at this, at this content hash" is kept in `state.json`
+(`.tiro/`, plain text, in git: principle 1 holds). The note itself is written
+only when Tiro does something to it, a block or a move. From then on it carries
+the usual keys, and the usual hash rule applies to it as well.
+
+### 5. Saying what was done unasked
+
+The user's trust depends on being able to see what happened without asking.
+
+- **The block** on a filed note opens with where it came from and how to undo
+  it: *"Filed here from `/` on 2026-10-02, unasked, by R-014. `tiro undo
+  <run>`, or move it back and Tiro will learn from that."*
+- **The journal** gets its own section, *Done unasked*, above everything else.
+  One line per note: what, where, why.
+- **The commit** is `tiro(auto): <note>`, with the usual trailers plus
+  `Tiro-Trigger: auto`.
+- **Corrections.** A user moving an auto-filed note back is already a
+  `moved-after-filing` correction. That is how auto mode learns: three of them
+  and `reflect` proposes a rule. Nothing new to build, but auto triage must
+  record its proposal in `state.json` the way explicit triage does.
+
+### 6. Daily notes — **ask**
+
+Daily notes live at the root, and some captures happen inside them. They are
+never moved. The question is whether auto mode should triage them at all, for
+related notes and suggestions only. The recommendation is **no** for now,
+because a daily note changes all day and is mostly a diary. A later option is
+to look at yesterday's daily note once, the next morning.
+
+### 7. Where the move is allowed — **ask**
+
+Moves are in: the user asked for "when all seems clear, just do it". The
+question is where. The recommendation is `"/" = "L4"` and nothing else. Auto
+mode then files loose captures, and never takes a note out of a folder the user
+chose. A folder can be raised to L4 later, one at a time, once the root has
+earned it.
+
+## Milestones
+
+### M0 — The trigger (1 day)
+`scan` gains the second clause: auto folders, `since`, settle time, seen
+hashes, `tiro: hold`, and at most once a day. `tiro status` shows what auto mode
+*would* look at and why each of the rest was passed over. `tiro auto on|off`
+writes `[auto]` and `since`.
+- **Done when:** on a copy of the real vault, switching it on queues nothing;
+  a new note at the root is queued 30 minutes after its last edit and not
+  before; a note in `uzh/` or `Roam/` is never queued; a note with `tiro:` is
+  queued once, by the explicit rule, not twice.
+
+### M1 — Auto triage, propose only (½ day)
+The runner runs `triage` on auto jobs. The skill gains `obvious` and `basis` in
+its answer, and the "suggested next verb" line. Seen hashes are written to state;
+the note only when a block is written.
+- **Done when:** an auto-triaged note carries exactly the block explicit triage
+  would have written, plus a line saying it was unasked; a note with nothing to
+  say is left byte-for-byte untouched.
+
+### M2 — The obvious move (1½ days)
+The move half of `apply_output` becomes a function both `file` and auto triage
+call. The gate's rule 4 permits a move for an auto job when the source is L4,
+the destination L3 and existing, and the basis checks out. One job, one commit,
+one undo.
+- **Done when:** a hostile test suite in the style of the gate's: an auto move
+  from an L3 folder is refused; one into a new folder is refused; one with a
+  basis naming notes that are not there is refused; one with a rule id that
+  does not exist is refused. And one real capture at the root is filed into
+  `uzh/` by analogy and `tiro undo` puts it back.
+
+### M3 — Saying so (½ day)
+The *Done unasked* journal section, the block header, the commit trailer, and
+the proposal record for corrections. `lint`'s stale-inbox check becomes "auto
+mode looked at this and did not act", with the reason.
+
+### M4 — Doc amendments (½ day)
+`rules/protocol.md` "The one rule" gets its second clause. `rules/safety.md`
+gets L4's first use. `DESIGN.md` §1 ①, §4.2 and §11 are updated, and STATUS
+records the decision and why.
+
+### M5 — The week — **the user's**
+Switch it on and live with it.
+
+**Estimate: ~4 focused days**, plus the week.
+
+## Acceptance criteria
+
+1. **Nothing old is touched.** In the week, no note last modified before `since`
+   gets a block or a move.
+2. **Every unasked action is visible.** Every `tiro(auto)` commit has a line under
+   *Done unasked* in that day's journal, and the other way round.
+3. **Obvious means obvious.** Of the notes auto mode moved, the user moves back
+   fewer than one in ten. More than that and the test in decision 2 is too
+   loose; tighten it before widening anything.
+4. **It is used.** At the end of the week, most new captures at the root have
+   either been filed or carry a proposal, and the user has not had to remember
+   a verb for them.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| A capture is filed somewhere the user never looks again, and is lost in practice though not in git | Only into existing folders, with a basis the runner checks; the journal names every move; moving it back teaches `reflect` |
+| Auto mode spends the budget on churn | `since`, settle time, once per note per day, `max_per_run`, and explicit requests go first |
+| A note's text talks Tiro into a move | The runner chooses the verb; the move needs L4, L3 and a checked basis; the gate checks it all again afterwards |
+| The user is mid-thought when Tiro moves the note away | 30 minutes of quiet first, and the 60-second guard and the mtime check before writing are still there |
+| Blocks appear on notes the user considers finished and private | Folders not listed are left alone; `tiro: hold` per note; an L1 folder is never auto |
