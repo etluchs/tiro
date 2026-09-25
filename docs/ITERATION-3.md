@@ -68,6 +68,20 @@ taking the model's word:
   exist and are in that folder. A basis that does not check out makes the
   proposal a proposal.
 - The note is not a daily note, has no `tiro:` verb, and is not in `Tiro/`.
+- **No correction has ever been logged against this note.** A user who moved
+  an auto-filed note back has answered; when they next edit it, Tiro may
+  propose again but must not move it again. That is the difference between
+  learning and insisting.
+
+`tiro/filed-to` is a full path, so an obvious move may also give an `Untitled`
+note a real name. That is within L4, but it is a rename, and the block says so.
+
+**This departs from STATUS decision 8** ("`file` goes where the note says"). In
+an auto move the destination is the skill's own key, and the checks above stand
+in for the user's word. It is the one place the model's output picks a path,
+which is why every part of the test is one the runner can check itself.
+`Job` gains a `trigger` (`request` or `auto`), and the gate and `apply_output`
+branch on it, not on the verb.
 
 Anything short of that writes the proposal block and stops. A note that could
 go two ways gets a `> [!question]`, as triage does now.
@@ -85,7 +99,7 @@ Roam import, and spends the day's budget by 08:00.
 - **Folders.** `[auto] folders`, default `["/"]` (the loose notes at the vault
   root). A folder not listed is left alone. L0 and L1 folders are left alone
   whatever the list says.
-- **New since the switch.** `[auto] since` is a date written by `tiro auto on`.
+- **New since the switch.** `since` is the time `tiro auto on` ran.
   A note untouched since then is never looked at. Nothing old gets swept.
 - **Settled.** The existing 60 seconds is tuned for "tag and walk away". A
   capture written in bursts over half an hour would be triaged at every burst.
@@ -97,19 +111,29 @@ Roam import, and spends the day's budget by 08:00.
 - **Explicit wins.** A note carrying `tiro:` follows the explicit protocol and
   auto mode ignores it.
 - **Leave me alone.** `tiro: hold` on a note means auto mode never looks at it.
-  It is a value of the user's key, not a job, and it is never queued.
+  It is a value of the user's key, not a job: the scan passes over it before a
+  job exists, so it is never blocked as an unknown verb, and `lint` does not
+  list it among the requests it could not read.
 - **Order and budget.** Explicit requests run first. Auto jobs take what is
   left of the run, at most `[auto] max_per_run` (default 5), and count against
   the same daily ceilings.
 
-### 4. Where "seen" lives: `.tiro/state.json`, until there is something to say
+### 4. Where "seen" lives: on the note, as now
 
-Writing `tiro/hash`, `tiro/id` and `tiro/status` onto every note Tiro glances at
-gives every loose capture a frontmatter block the user did not ask for. So the
-record of "looked at this, at this content hash" is kept in `state.json`
-(`.tiro/`, plain text, in git: principle 1 holds). The note itself is written
-only when Tiro does something to it, a block or a move. From then on it carries
-the usual keys, and the usual hash rule applies to it as well.
+Triage always writes a block, even if it only says "a fragment, nothing to
+file". So every note auto mode looks at ends up with `tiro/hash` anyway, and
+that is the record: no hash means new, a different hash means changed. No
+second mechanism. The cost is that loose captures get Tiro's keys in their
+frontmatter. That is what `tiro strip` is for.
+
+Two things do live in `.tiro/state.json`, because they cannot live on the note:
+
+- **`since`**, written by `tiro auto on`. Runtime state, not configuration.
+- **Declined notes.** `tiro undo` on an auto job restores the note's bytes from
+  before Tiro, with no hash. As it stands, the next run would see a new note and
+  file it again, up to three times a day. So undoing an auto job records the
+  note's user hash as declined, and the scan passes over a match. The user
+  editing the note clears it.
 
 ### 5. Saying what was done unasked
 
@@ -147,9 +171,9 @@ earned it.
 
 ### M0 — The trigger (1 day)
 `scan` gains the second clause: auto folders, `since`, settle time, seen
-hashes, `tiro: hold`, and at most once a day. `tiro status` shows what auto mode
-*would* look at and why each of the rest was passed over. `tiro auto on|off`
-writes `[auto]` and `since`.
+hashes, `tiro: hold`, declined notes, and at most once a day. `tiro status`
+shows what auto mode *would* look at and why each of the rest was passed over.
+`tiro auto on|off` records `since` in `state.json`.
 - **Done when:** on a copy of the real vault, switching it on queues nothing;
   a new note at the root is queued 30 minutes after its last edit and not
   before; a note in `uzh/` or `Roam/` is never queued; a note with `tiro:` is
@@ -157,11 +181,10 @@ writes `[auto]` and `since`.
 
 ### M1 — Auto triage, propose only (½ day)
 The runner runs `triage` on auto jobs. The skill gains `obvious` and `basis` in
-its answer, and the "suggested next verb" line. Seen hashes are written to state;
-the note only when a block is written.
+its answer, and the "suggested next verb" line.
 - **Done when:** an auto-triaged note carries exactly the block explicit triage
-  would have written, plus a line saying it was unasked; a note with nothing to
-  say is left byte-for-byte untouched.
+  would have written, plus a line saying it was unasked, and is not looked at
+  again until the user changes it.
 
 ### M2 — The obvious move (1½ days)
 The move half of `apply_output` becomes a function both `file` and auto triage
@@ -171,8 +194,9 @@ one undo.
 - **Done when:** a hostile test suite in the style of the gate's: an auto move
   from an L3 folder is refused; one into a new folder is refused; one with a
   basis naming notes that are not there is refused; one with a rule id that
-  does not exist is refused. And one real capture at the root is filed into
-  `uzh/` by analogy and `tiro undo` puts it back.
+  does not exist is refused; one for a note with a logged correction is
+  refused. And one real capture at the root is filed into `uzh/` by analogy,
+  `tiro undo` puts it back, and the next run leaves it there.
 
 ### M3 — Saying so (½ day)
 The *Done unasked* journal section, the block header, the commit trailer, and
