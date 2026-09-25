@@ -50,6 +50,28 @@ without structure grows its folders one filing at a time.
 The permissive shape, and the one `tiro adopt` drafts, is `default = "L3"` with
 the few folders that are private or archival pinned to L0 or L1.
 
+## Auto mode is the move L4 was kept for
+
+Auto mode (`protocol.md`) moves notes nobody tagged. With no tag there is no
+accept on the note, so never #2 applies in full: the source folder must be
+**L4**. Raising a folder to L4 is the user's accept, given in advance. On top of
+that, the runner moves a note only when all of these hold, and says on the
+note which one failed otherwise:
+
+- triage said the destination is obvious and gave a basis, and the basis
+  checks out: a rule id that is in `rules.md`, or at least two existing notes
+  in the destination folder;
+- the destination is L3 and its folder **already exists**. Auto mode never
+  creates a folder;
+- the note is not a daily note, has never been filed by Tiro, and the user has
+  never corrected Tiro on it or undone an auto job on it.
+
+So Tiro moves a note at most once, and never against the user. The gate checks
+the source's level and the folder rule again afterwards, as a fact.
+
+Without the tag, "L2 for itself" does not apply: an auto job may write its
+block only where the folder is L2 or higher.
+
 ## The gate
 
 Before any commit, every one of these must hold, or the job's changes are rolled
@@ -62,6 +84,13 @@ back and the note is marked `blocked`:
    permit that particular move.
 5. Every wikilink that resolved before the job still resolves.
 6. The note's mtime is unchanged since the job read it.
+
+Before a job writes to a note the user has changed since the last commit, the
+runner commits it as they left it (`tiro: keep …`, with no `Tiro-Run`
+trailer). The job's own commit is then only Tiro's change, and `tiro undo`,
+a `git revert` of the run's job commits, takes away Tiro's work and not the
+user's. Without it, undoing a job on a note that was never committed deleted
+the note. The journal commit is not reverted: it is the record.
 
 Undoing a job puts back what Tiro changed, and nothing else. It does not use
 `git checkout`: HEAD lacks every edit the user has not committed, so restoring

@@ -44,6 +44,16 @@ stale_days = 30
 threshold = 3
 every_days = 7
 
+[auto]
+# Auto mode: look after new notes without a tag (`tiro auto on`, ITERATION-3).
+# Where it looks. Unset means the vault root plus every L4 folder in trust.toml,
+# which are also the only folders it moves notes out of.
+# folders = ["/"]
+# Look at a note once it has been quiet this long.
+settle_minutes = 30
+# At most this many auto jobs per run, after the notes you tagged.
+max_per_run = 5
+
 [index]
 # Folders that get a Map of Content, rebuilt when their contents change.
 # Created only where the folder is L3 in trust.toml; kept up to date wherever

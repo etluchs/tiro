@@ -11,6 +11,8 @@ from tiro.ops import BrokenLink, OpsDown
 class FilesystemOps:
     name = "filesystem"
     authoritative = False
+    #: Only Obsidian moves a note, so that it rewrites the links to it.
+    can_move = False
 
     def __init__(self, vault: Path) -> None:
         self.vault = vault

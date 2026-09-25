@@ -47,6 +47,10 @@ class Job:
     hash_before: str
     mtime: float
     reason: str
+    #: ``request`` when the user tagged the note; ``auto`` when auto mode chose
+    #: it. The verb of an auto job is always ``triage``, and the runner, not the
+    #: model, is what chose it.
+    trigger: str = "request"
 
     @property
     def valid_verb(self) -> bool:
@@ -85,7 +89,7 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
             skipped.append(Skipped(rel, f"unreadable: {exc}"))
             continue
         verb = protocol.verb(text)
-        if verb is None:
+        if verb is None or verb == protocol.HOLD:
             continue
         if config.trust.level_for(rel) == "L0":
             # L0 is "Tiro does not touch this". A tag inside is a note, not a

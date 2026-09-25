@@ -17,7 +17,9 @@ tiro/hash: 8f3c…                  # hash of the USER's content at that time
 ```
 
 Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`, `connect`. Anything else
-is blocked with "unknown verb". A body tag `#tiro/research` is read as
+is blocked with "unknown verb". One more value is not a verb: `tiro: hold` (or
+`#tiro/hold`) means "leave this note alone". It is never queued, and auto mode
+never looks at the note. A body tag `#tiro/research` is read as
 `tiro: research` anywhere in the note, so Obsidian's tag pane doubles as the
 queue. The looser `#tiro research` that people actually type is read too, but
 only at the end of a line, so that "#tiro file it tomorrow" stays a sentence.
@@ -46,6 +48,27 @@ removed. Two keys stay in because the user edits them: the `tiro:` verb
 Tiro writes both before it records the hash, so its own output cannot trigger
 Tiro, and the user's can. Get this wrong in either direction and either the
 loop never terminates or the accept is never noticed.
+
+## Auto mode: the second trigger
+
+When auto mode is on (`tiro auto on`), a note with **no** `tiro:` is also acted
+on when all of these hold:
+
+- it is in an auto folder: `[auto] folders`, by default the root plus every L4
+  folder, and that folder is at least L2;
+- it was modified after auto mode was switched on;
+- its hash is absent or differs, by the same rule as above;
+- it has been quiet for `[auto] settle_minutes` (default 30), and was not
+  looked at already today;
+- it is not a daily note dated today. A daily note is looked at once, the
+  morning after, and never again;
+- the user did not undo an auto job on it at its current content.
+
+The runner queues `triage` for it; the model never chooses the verb. The move
+that may follow is the one rule in `safety.md` that uses L4. Requests the user
+tagged run first, and auto jobs take at most `[auto] max_per_run` of what is
+left. An auto job's commit is `tiro(auto): <note>` with `Tiro-Trigger: auto`,
+and the journal lists it under **Done unasked**.
 
 ## Blocks
 

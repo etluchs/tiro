@@ -44,6 +44,13 @@ link rewriting fires (§3.4). And
 "evolving" is given a concrete mechanism — a correction log and proposed rule
 diffs the user accepts (§7). Iteration 1 moves no file the user has not accepted.
 
+*Revised in iteration 3.* In use, the one-word accept turned out to be a
+decision the user did not have time for when writing the note. The accept can
+now also be given in advance, per folder, by raising it to L4. Auto mode then
+files an untagged note, but only when the runner can check the reason and the
+destination folder already exists ([ITERATION-3](ITERATION-3.md),
+`rules/safety.md`).
+
 **② "Evolving rules" needs a home and a version.** Rules that the agent can
 rewrite silently are not rules. They live in two places with different mutability
 (§3.1), both under git, and Tiro may propose changes but never self-amend.
@@ -343,6 +350,11 @@ That single rule gives us everything:
 Tiro-owned blocks removed. Tiro's own output therefore cannot trigger Tiro. This
 is the detail that makes the rule work; get it wrong and the loop never
 terminates.
+
+**A second trigger, since iteration 3.** With auto mode on, an untagged note in
+an auto folder is triaged under the same hash rule, once it has settled, if it
+was written after the mode was switched on. The runner picks the verb, and it
+is always `triage`. `rules/protocol.md` has the full conditions.
 
 ### 4.3 Tiro-owned blocks
 
@@ -693,6 +705,11 @@ notification, and it arrives wherever the vault syncs.
   consequences, both handled in §5.5: they need visible provenance on the board,
   since nothing else distinguishes them; and the credential carries the user's
   full Jira permissions, so `dispatch` is pinned to a single project key.
+
+- **Auto mode** (iteration 3). Tiro looks after new notes in the folders the
+  user opens up, without a tag, and files one when the runner can check that
+  the filing is obvious. The explicit protocol is unchanged, for when the user
+  is thinking about how the vault is organised.
 
 ### Open
 

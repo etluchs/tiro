@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from tiro import journal, lint, ops as ops_mod, protocol, runner, scan
+from tiro import auto, journal, lint, ops as ops_mod, protocol, runner, scan
 from tiro.config import TRUST_MEANING, Config, ConfigError
 from tiro.jira import Acli
 from tiro.vcs import Git, LockBusy, run_lock
@@ -95,14 +95,27 @@ def cmd_status(args: argparse.Namespace) -> int:
     if spent:
         print(f"         SPENT — {spent}")
 
-    jobs, skipped = scan.scan(config)
+    for line in auto.status_lines(config, state):
+        print(line)
+
+    jobs, skipped = _queue(config, state)
     print(f"\nqueue    {len(jobs)} job(s), {len(skipped)} skipped")
     for job in jobs:
         mark = " " if job.valid_verb else "!"
-        print(f"  {mark} {job.verb:<9} {job.rel}  ({job.reason})")
+        verb = "auto" if job.trigger == "auto" else job.verb
+        print(f"  {mark} {verb:<9} {job.rel}  ({job.reason})")
     for skip in skipped:
         print(f"    skip      {skip.rel}  ({skip.why})")
     return 0
+
+
+def _queue(config: Config, state: dict):
+    """What the next run would take on: the user's requests, then auto mode's
+    notes within what is left of the run, as ``runner.once`` counts them."""
+    jobs, skipped = scan.scan(config)
+    auto_jobs, auto_skipped = auto.scan(config, state)
+    room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
+    return jobs[: config.run.max_jobs] + auto_jobs[:room], skipped + auto_skipped
 
 
 def cmd_once(args: argparse.Namespace) -> int:
@@ -110,10 +123,10 @@ def cmd_once(args: argparse.Namespace) -> int:
     ops = _ops(config, args)
 
     if args.dry_run:
-        jobs, skipped = scan.scan(config)
+        jobs, _ = _queue(config, runner._load_state(config))
         print(f"would run {len(jobs)} job(s) with the {ops.name} backend:")
-        for job in jobs[: config.run.max_jobs]:
-            print(f"  {job.verb:<9} {job.rel}")
+        for job in jobs:
+            print(f"  {'auto' if job.trigger == 'auto' else job.verb:<9} {job.rel}")
         return 0
 
     from tiro.agent import ClaudeAgentRunner
@@ -276,9 +289,61 @@ def cmd_undo(args: argparse.Namespace) -> int:
     if not shas:
         print(f"no commits carry Tiro-Run: {args.run_id}")
         return 1
+    # The journal commit stays. It is the record that the run happened, and it
+    # carries `.tiro/state.json`: reverting it wiped the day's spend, the
+    # attempts count and whether auto mode was on, along with the work.
+    shas = [sha for sha in shas if _trailer(git, sha, "Tiro-Job") != "journal"]
+    if not shas:
+        print(f"run {args.run_id} changed no notes; nothing to undo")
+        return 0
     print(f"reverting {len(shas)} commit(s) from {args.run_id}")
+    # Which notes auto mode worked on, read before the revert. Undoing an auto
+    # job puts the note back as it was before Tiro, with no hash — which the
+    # next run would take for a new note and file all over again.
+    unasked = [_trailer(git, sha, "Tiro-Note") for sha in shas
+               if _trailer(git, sha, "Tiro-Trigger") == "auto"]
     git.revert(shas)
+    if unasked:
+        state = runner._load_state(config)
+        for rel in filter(None, unasked):
+            path = config.vault / rel
+            if path.exists():
+                auto.decline(state, rel, protocol.user_hash(path.read_text(encoding="utf-8")))
+                print(f"auto mode will leave {rel} alone, and never move it again")
+        runner._save_state(config, state)
     print("done — review with `git log` and push when you are happy")
+    return 0
+
+
+def _trailer(git: Git, sha: str, name: str) -> str:
+    for line in git("log", "-1", "--format=%B", sha).splitlines():
+        if line.startswith(name + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def cmd_auto(args: argparse.Namespace) -> int:
+    """Switch auto mode on or off, or say whether it is on. Writes only
+    `.tiro/state.json`."""
+    config = _config(args)
+    with run_lock(config.tiro_dir / "lock"):
+        state = runner._load_state(config)
+        if args.switch == "on":
+            auto.switch_on(state)
+            runner._save_state(config, state)
+        elif args.switch == "off":
+            auto.switch_off(state)
+            runner._save_state(config, state)
+    for line in auto.status_lines(config, state):
+        print(line)
+    if args.switch == "on":
+        print("\nNotes written from now on are looked at once they have been quiet "
+              f"{config.auto.settle_minutes} minutes. Nothing older is touched.")
+        if not any(config.trust.permits(
+                "x.md" if f == "/" else f.rstrip("/") + "/x.md", auto.MOVE_FROM_TRUST)
+                for f in config.auto_folders()):
+            print('No auto folder is L4, so Tiro proposes and moves nothing. Set '
+                  '"/" = "L4" in .tiro/trust.toml to let it file loose notes.')
     return 0
 
 
@@ -393,6 +458,11 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("rule_id", help="e.g. R-019")
     reject.add_argument("reason", help="why; kept with the proposal")
     reject.set_defaults(fn=cmd_reject)
+
+    auto_p = sub.add_parser("auto", help="look after new notes without being asked")
+    auto_p.add_argument("switch", nargs="?", choices=["on", "off", "status"],
+                        default="status")
+    auto_p.set_defaults(fn=cmd_auto)
 
     undo = sub.add_parser("undo", help="revert a run")
     undo.add_argument("run_id")

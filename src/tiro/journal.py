@@ -23,6 +23,8 @@ class Entry:
     detail: str = ""
     commit: str = ""
     usage: Usage = field(default_factory=Usage)
+    trigger: str = "request"  # request | auto
+    moved_to: str = ""
 
 
 @dataclass
@@ -82,10 +84,17 @@ def write_journal(config: Config, record: RunRecord) -> Path:
     lines.append("")
     if not (record.entries or record.skipped or record.notes):
         lines.append("- nothing to do")
+    # What Tiro did without being asked comes first and under its own heading:
+    # the user's trust in auto mode rests on seeing it without looking for it.
+    unasked = [e for e in record.entries if e.trigger == "auto"]
+    if unasked:
+        lines += ["### Done unasked", ""]
+        for entry in unasked:
+            lines.append(_entry_line(entry, link=entry.moved_to or entry.note))
+        lines += ["", "### The rest", "" ]
     for entry in record.entries:
-        mark = {"done": "✓", "blocked": "✗", "needs-input": "?", "preview": "·"}.get(entry.outcome, "·")
-        detail = f" — {entry.detail}" if entry.detail else ""
-        lines.append(f"- {mark} `{entry.verb}` [[{_link(entry.note)}]]{detail}")
+        if entry.trigger != "auto":
+            lines.append(_entry_line(entry, link=entry.note))
     for skip in record.skipped:
         lines.append(f"- · skipped [[{_link(skip['rel'])}]] — {skip['why']}")
     for note in record.notes:
@@ -147,6 +156,12 @@ def spend(usage: Usage) -> str:
         tokens += f" ({usage.cache_read_tokens:,} from cache)"
     cost = f"${usage.cost_usd:.2f}" if usage.cost_usd is not None else "cost not reported"
     return f"{tokens}, {cost}."
+
+
+def _entry_line(entry: Entry, *, link: str) -> str:
+    mark = {"done": "✓", "blocked": "✗", "needs-input": "?", "preview": "·"}.get(entry.outcome, "·")
+    detail = f" — {entry.detail}" if entry.detail else ""
+    return f"- {mark} `{entry.verb}` [[{_link(link)}]]{detail}"
 
 
 def _link(rel: str) -> str:

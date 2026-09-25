@@ -215,7 +215,7 @@ def _protocol_problems(rel: str, text: str) -> list[Finding]:
     keys = protocol.read_keys(text)
 
     verb = keys.get("tiro")
-    if verb and verb not in protocol.VERBS:
+    if verb and verb not in protocol.WORDS:
         out.append(Finding("unknown verb", rel, f"`{verb}`"))
 
     status = keys.get("tiro/status")
@@ -232,7 +232,9 @@ def _protocol_problems(rel: str, text: str) -> list[Finding]:
             out.append(Finding("duplicate block", rel, f"id={block.id}"))
         seen.add(block.id)
 
-    if keys.get("tiro/hash") and not verb:
+    # Auto mode leaves a hash on notes nobody tagged, always beside its block.
+    # A hash with neither a request nor a block is the orphan.
+    if keys.get("tiro/hash") and not verb and not blocks:
         out.append(Finding("orphaned state", rel, "a tiro/hash with no request"))
 
     if protocol.looks_like_request(text):

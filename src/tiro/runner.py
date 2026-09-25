@@ -16,15 +16,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tiro import connect, corrections, gate, journal, protocol, reflect
+from tiro import auto, connect, corrections, gate, journal, protocol, reflect
 from tiro import index as folder_index
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
-from tiro.config import Config
+from tiro.config import Config, as_vault_path
 from tiro.failure import is_machine
 from tiro.jira import Acli, JiraError, build_payload, note_label
 from tiro.links import Index
 from tiro.ops import OpsUnavailable, VaultOps
-from tiro.scan import Job, iter_notes, scan
+from tiro.scan import Job, is_daily, iter_notes, scan
 from tiro.undo import Undo
 from tiro.vcs import Git, LockBusy, run_lock
 
@@ -37,6 +37,8 @@ class Outcome:
     usage: Usage = field(default_factory=Usage)
     #: ids this job wrote a block for, so a later deletion is a correction.
     wrote_block: list[str] = field(default_factory=list)
+    #: where the note went, when the job moved it.
+    moved_to: str = ""
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -121,6 +123,12 @@ def over_budget(config: Config, state: dict, day: str) -> str | None:
     return None
 
 
+def _local_day(now: float | None) -> str:
+    """The user's calendar day, which is what "once a day" and "yesterday's
+    daily note" are counted in."""
+    return datetime.fromtimestamp(time.time() if now is None else now).date().isoformat()
+
+
 def reset_crashed_notes(config: Config, git: Git) -> list[str]:
     """A note left `working` with no live lock is a crashed run, not a busy one."""
     reset: list[str] = []
@@ -149,6 +157,7 @@ def apply_output(
     rewritten: set[str] | None = None,
     wrote_block: list[str] | None = None,
     undo: Undo | None = None,
+    state: dict | None = None,
 ) -> tuple[list[str], tuple[str, str] | None]:
     """Serialise the agent's result into the note. Returns (declared, moved).
 
@@ -184,6 +193,23 @@ def apply_output(
         # what cannot be checked is dropped and counted, never passed through.
         output = connect.apply(config, job.rel, text, output, today=run_id[:10])
 
+    # Auto mode: whether the move triage proposed is obvious, by the runner's
+    # own checks. Decided before the note is written, from the note as the
+    # user left it, and said on the note either way.
+    auto_destination = ""
+    if job.trigger == "auto":
+        if is_daily(job.rel):
+            output.keys.pop("tiro/filed-to", None)
+        proposed = as_vault_path(output.keys.get("tiro/filed-to", "").strip())
+        why = auto.move_problem(config, state or {}, job, text, output.status,
+                                output.obvious, output.basis, proposed)
+        if why is None:
+            auto_destination = proposed
+            line = auto.moved_line(job.rel, run_id, output.basis)
+        else:
+            line = auto.stayed_line(why, "" if proposed == job.rel else proposed)
+        output.block = (output.block.rstrip() + "\n\n" + line).strip()
+
     if output.block.strip():
         text = protocol.upsert_block(text, job=job.verb, id=note_id, body=output.block)
         if wrote_block is not None:
@@ -203,6 +229,7 @@ def apply_output(
     created_dirs = [] if created_dirs is None else created_dirs
     rewritten = set() if rewritten is None else rewritten
 
+    destination = ""
     if job.verb == "file":
         # The destination is the one the user accepted: the `tiro/filed-to`
         # that was on the note when they wrote `tiro: file`. The skill may
@@ -220,12 +247,19 @@ def apply_output(
                 f"`{proposed}`; the note wins — edit it if you meant the other"
             )
         destination = accepted
+    elif auto_destination:
+        # Checked in full by ``auto.move_problem`` above; the checks below
+        # and the gate's afterwards apply to it all the same.
+        destination = auto_destination
+
+    if destination:
         # Refuse before touching anything, so a move we would have to undo is
         # never started. The gate checks all of this again afterwards.
         problem = gate.destination_problem(config, destination)
         if problem:
             raise OpsUnavailable(f"cannot file to {destination}: {problem}")
-        if not config.trust.permits(job.rel, gate.MOVE_FROM_TRUST):
+        leave = auto.MOVE_FROM_TRUST if job.trigger == "auto" else gate.MOVE_FROM_TRUST
+        if not config.trust.permits(job.rel, leave):
             raise OpsUnavailable(
                 f"cannot move a note out of {job.rel}: that folder is "
                 f"{config.trust.level_for(job.rel)}"
@@ -384,6 +418,7 @@ def execute_job(
     job: Job,
     *,
     run_id: str,
+    state: dict | None = None,
 ) -> Outcome:
     note = config.vault / job.rel
 
@@ -393,7 +428,10 @@ def execute_job(
     # Writing a "blocked" block would be exactly the write L0 forbids, so the
     # refusal goes in the journal alone.
     required = gate.REQUIRED_TRUST.get(job.verb, "L2")
-    if not gate.note_permits(config, job.rel, required):
+    # An auto job has no tag to count as consent: its folder alone decides.
+    permitted = (config.trust.permits(job.rel, auto.WRITE_TRUST) if job.trigger == "auto"
+                 else gate.note_permits(config, job.rel, required))
+    if not permitted:
         level = config.trust.level_for(job.rel)
         return Outcome("skipped", f"`{job.verb}` needs {required}; {job.rel} is {level}")
 
@@ -404,7 +442,8 @@ def execute_job(
 
     undo = Undo(config.vault)
     try:
-        return _execute(config, git, ops, agent, job, run_id=run_id, undo=undo)
+        return _execute(config, git, ops, agent, job, run_id=run_id, undo=undo,
+                        state=state)
     except Exception as exc:  # noqa: BLE001 - the last line of never #4
         # Anything the handlers below did not expect. The note may have been
         # written and not committed; put back what Tiro changed, say so on the
@@ -426,8 +465,10 @@ def _execute(
     *,
     run_id: str,
     undo: Undo,
+    state: dict | None = None,
 ) -> Outcome:
     note = config.vault / job.rel
+    _keep(git, job, run_id)
     text = note.read_text(encoding="utf-8")
     baseline_mtime = note.stat().st_mtime
     undo.write(job.rel, protocol.set_key(text, "tiro/status", "working"),
@@ -458,7 +499,7 @@ def _execute(
         declared, moved = apply_output(
             config, job, output, run_id=run_id, ops=ops, baseline_mtime=baseline_mtime,
             created_dirs=created_dirs, rewritten=rewritten, wrote_block=wrote_block,
-            undo=undo,
+            undo=undo, state=state,
         )
     except _NoteMovedUnderUs:
         # The user is typing in this note. Undo leaves it alone, since it is no
@@ -477,6 +518,7 @@ def _execute(
         config, git, ops,
         verb=job.verb, note_rel=job.rel, declared=declared,
         before=before, moved=moved, rewritten=rewritten,
+        trigger=job.trigger, new_folder=bool(created_dirs),
     )
     if not result.ok:
         # Put back what Tiro changed and nothing else. A path the job did not
@@ -497,12 +539,35 @@ def _execute(
 
     outcome_name = "preview" if (job.verb == "dispatch" and not config.dispatch.live) else output.status
     summary = output.detail or f"{job.verb} {job.rel}"
+    label = "auto" if job.trigger == "auto" else job.verb
     sha = git.commit(
         declared,
-        f"tiro({job.verb}): {Path(job.rel).stem}\n\n{summary}",
+        f"tiro({label}): {Path(job.rel).stem}\n\n{summary}",
         _trailers(run_id, job),
     )
-    return Outcome(outcome_name, output.detail, sha or "", output.usage, wrote_block)
+    detail = output.detail
+    if moved and job.trigger == "auto":
+        detail = f"filed to `{moved[1]}`" + (f" — {detail}" if detail else "")
+    return Outcome(outcome_name, detail, sha or "", output.usage, wrote_block,
+                   moved_to=moved[1] if moved else "")
+
+
+def _keep(git: Git, job: Job, run_id: str) -> None:
+    """Commit the note as the user left it, before Tiro touches it.
+
+    Without this the job's commit carries the user's uncommitted words along
+    with Tiro's, and ``tiro undo`` — a ``git revert`` — takes both away. For a
+    note that was never committed at all, reverting the job that added it
+    deletes it from the working tree, which is never #1 by another route. Auto
+    mode makes that the common case: a fresh capture is always uncommitted.
+    The commit carries no ``Tiro-Run`` trailer, so undoing the run leaves it.
+    """
+    if not (git.repo / job.rel).exists():
+        return
+    if not git("status", "--porcelain", "--", job.rel).strip():
+        return
+    git.commit([job.rel], f"tiro: keep {job.rel} as you left it",
+               {"Tiro-Keep": run_id, "Tiro-Note": job.rel})
 
 
 def _commit_block(git: Git, job: Job, run_id: str) -> None:
@@ -517,7 +582,10 @@ def _link(rel: str) -> str:
 
 
 def _trailers(run_id: str, job: Job) -> dict[str, str]:
-    return {"Tiro-Run": run_id, "Tiro-Job": job.verb, "Tiro-Note": job.rel}
+    trailers = {"Tiro-Run": run_id, "Tiro-Job": job.verb, "Tiro-Note": job.rel}
+    if job.trigger == "auto":
+        trailers["Tiro-Trigger"] = "auto"
+    return trailers
 
 
 def _render_skill(config: Config, job: Job, text: str) -> str:
@@ -537,10 +605,24 @@ def _render_skill(config: Config, job: Job, text: str) -> str:
         + "\n\n---\n\n## This job\n\n"
         + f"Note: `{job.rel}`\nVault root: `{config.vault}`\n"
         + rules_line
+        + (_auto_line(job) if job.trigger == "auto" else "")
         + "\nThe note as it stands:\n\n<note>\n"
         + text
         + "\n</note>\n"
     )
+
+
+def _auto_line(job: Job) -> str:
+    if is_daily(job.rel):
+        return ("\nNobody asked for this job: it is auto mode, looking at "
+                "yesterday's daily note. A daily note never moves, so propose no "
+                "destination and leave `obvious` false. Related notes, and a "
+                "suggested next verb for anything in it that wants one, are "
+                "what is useful here.\n")
+    return ("\nNobody asked for this job: it is auto mode, looking at a note the "
+            "user wrote without tagging it. Work it out as for any triage. Say "
+            "`obvious` only when the destination is clearly right, and give the "
+            "basis; the runner checks it before anything moves.\n")
 
 
 def _block_note(config: Config, job: Job, why: str, run_id: str, *,
@@ -598,9 +680,15 @@ def once(
             record.note_line(f"reset `{rel}` from `working` to `queued` after a crashed run")
 
         jobs, skipped = scan(config, now=now)
-        record.skipped = [{"rel": s.rel, "why": s.why} for s in skipped]
-
         state = _load_state(config)
+
+        # Auto mode's notes after the ones the user asked for, and within what
+        # the run has left. A note the user tagged is never among them.
+        auto_jobs, auto_skipped = auto.scan(config, state, now=now)
+        room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
+        jobs = jobs[: config.run.max_jobs] + auto_jobs[:room]
+        skipped += auto_skipped
+        record.skipped = [{"rel": s.rel, "why": s.why} for s in skipped]
 
         # Before any job runs, so what is observed is the user's doing and not
         # this run's. Costs no model time: it is a diff between what Tiro
@@ -614,7 +702,7 @@ def once(
         day = run_id[:10]
         deadline = time.monotonic() + config.run.max_seconds
 
-        for job in jobs[: config.run.max_jobs]:
+        for job in jobs:
             if time.monotonic() > deadline:
                 record.note_line("stopped early: the run's time budget ran out")
                 break
@@ -623,17 +711,29 @@ def once(
                 record.note_line(f"**stopped early** — {spent}. Nothing further runs "
                                  "until tomorrow; raise `[run]` in `tiro.toml` to change that")
                 break
+            if (job.trigger == "auto" and not getattr(ops, "can_move", False)
+                    and config.trust.permits(job.rel, auto.MOVE_FROM_TRUST)):
+                # The note may well want moving, and only Obsidian can. Wait for
+                # it rather than spend a triage whose move would fail, and whose
+                # note would then not be looked at again until tomorrow.
+                record.skipped.append({"rel": job.rel, "why": "auto: waiting for "
+                                       "Obsidian, which does the moving"})
+                continue
             key = _attempts_key(job, day)
             attempts = int(state["attempts"].get(key, 0))
             if attempts >= config.run.max_attempts_per_note_per_day:
                 record.skipped.append({"rel": job.rel, "why": f"{attempts} attempts today already"})
                 continue
             state["attempts"][key] = attempts + 1
+            if job.trigger == "auto":
+                auto.mark_looked(state, job.rel, _local_day(now))
             _save_state(config, state)
 
-            outcome = execute_job(config, git, ops, agent, job, run_id=run_id)
+            outcome = execute_job(config, git, ops, agent, job, run_id=run_id,
+                                  state=state)
             record.add(journal.Entry(job.verb, job.rel, outcome.outcome,
-                                     outcome.detail, outcome.commit, outcome.usage))
+                                     outcome.detail, outcome.commit, outcome.usage,
+                                     trigger=job.trigger, moved_to=outcome.moved_to))
             for block_id in outcome.wrote_block:
                 corrections.remember_block(state, block_id, run_id)
             if job.verb == "triage" and outcome.outcome == "done":

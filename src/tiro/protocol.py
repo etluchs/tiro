@@ -23,6 +23,11 @@ import uuid
 from dataclasses import dataclass
 
 VERBS = ("triage", "file", "research", "distill", "spec", "dispatch", "connect")
+#: ``tiro: hold`` is the user saying "leave this one alone". It is a value of
+#: the user's key but not a job: the scan passes over it before a job exists,
+#: so auto mode never looks at the note and nothing is queued for it.
+HOLD = "hold"
+WORDS = (*VERBS, HOLD)
 STATUSES = ("queued", "working", "done", "blocked", "needs-input")
 
 FENCE = "---"
@@ -32,7 +37,7 @@ _TIRO_KEY = re.compile(r"^(tiro(?:/[A-Za-z0-9_-]+)?)\s*:(.*)$")
 #: read only when it *is* the end of a line — "#tiro file it tomorrow" is a
 #: sentence, not a request to move the note. A ``#tiro`` followed by anything
 #: else is a near-miss, and lint reports it.
-_VERB_ALT = "|".join(VERBS)
+_VERB_ALT = "|".join(WORDS)
 _BODY_TAG = re.compile(r"(?<![\w/#])#tiro/(" + _VERB_ALT + r")(?![\w/-])", re.I)
 _BODY_TAG_LOOSE = re.compile(r"(?<![\w/#])#tiro[ \t]+(" + _VERB_ALT + r")[.!]?[ \t]*$", re.M | re.I)
 _BODY_TAG_ANY = re.compile(r"(?<![\w/#])#tiro(?!\w)", re.I)
@@ -327,5 +332,14 @@ def needs_work(text: str) -> bool:
     """
     if verb(text) is None:
         return False
+    return unseen(text)
+
+
+def unseen(text: str) -> bool:
+    """Tiro has never hashed this note, or the user's content has changed since.
+
+    The half of the one rule that auto mode shares: an untagged note in an auto
+    folder is looked at on exactly this condition (ITERATION-3).
+    """
     recorded = read_keys(text).get("tiro/hash")
     return not recorded or recorded != user_hash(text)

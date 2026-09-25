@@ -22,6 +22,26 @@ prose, `dispatch`) stay out of reach.
 
 Design rationale: [DESIGN.md](DESIGN.md). Before this: [ITERATION-2](ITERATION-2.md).
 
+## Where it stands: 2026-09-25
+
+M0 to M4 are built, with 35 tests in `tests/test_auto.py`. **What is left is
+the user's:** raise `"/"` (and any other folders) to L4 in `.tiro/trust.toml`,
+run `tiro auto on`, and live with it for a week (M5).
+
+Three things differ from the plan below:
+
+- **`tiro undo` had to change.** It is a `git revert`, and a job's commit
+  carried the user's uncommitted text with Tiro's, so undo reverted both. On a
+  capture that was never committed, it deleted the note. The runner now
+  commits a changed note as the user left it before a job touches it, and
+  undo no longer reverts the journal commit, which carries `state.json`.
+- **Tiro moves a note at most once.** Decision 3 assumed a filed note leaves
+  the auto folders. It does not when the destination is also L4. A note
+  carrying `tiro/filed` is proposed for, never moved again.
+- **Lint's stale-inbox check is unchanged.** Why auto mode did not move a note
+  is written on the note itself, and a second copy in `Health.md` can wait
+  until the week shows whether anyone looks for it there.
+
 ## The shape, in one paragraph
 
 A second trigger, not a new verb. The rule today is "act when `tiro:` is present
