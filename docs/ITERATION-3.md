@@ -67,7 +67,8 @@ taking the model's word:
   are like this one. The runner checks that the rule exists, or that the notes
   exist and are in that folder. A basis that does not check out makes the
   proposal a proposal.
-- The note is not a daily note, has no `tiro:` verb, and is not in `Tiro/`.
+- The note is not a daily note (decision 6), has no `tiro:` verb, and is not in
+  `Tiro/`.
 - **No correction has ever been logged against this note.** A user who moved
   an auto-filed note back has answered; when they next edit it, Tiro may
   propose again but must not move it again. That is the difference between
@@ -96,8 +97,8 @@ folder, by raising it to L4.
 Without bounds, the first run triages 929 notes, two thirds of them a dormant
 Roam import, and spends the day's budget by 08:00.
 
-- **Folders.** `[auto] folders`, default `["/"]` (the loose notes at the vault
-  root). A folder not listed is left alone. L0 and L1 folders are left alone
+- **Folders.** `[auto] folders`, by default the root plus every L4 folder
+  (decision 7). A folder not listed is left alone. L0 and L1 folders are left alone
   whatever the list says.
 - **New since the switch.** `since` is the time `tiro auto on` ran.
   A note untouched since then is never looked at. Nothing old gets swept.
@@ -151,21 +152,22 @@ The user's trust depends on being able to see what happened without asking.
   and `reflect` proposes a rule. Nothing new to build, but auto triage must
   record its proposal in `state.json` the way explicit triage does.
 
-### 6. Daily notes — **ask**
+### 6. Daily notes: yesterday's, once — **decided 2026-09-25**
 
-Daily notes live at the root, and some captures happen inside them. They are
-never moved. The question is whether auto mode should triage them at all, for
-related notes and suggestions only. The recommendation is **no** for now,
-because a daily note changes all day and is mostly a diary. A later option is
-to look at yesterday's daily note once, the next morning.
+Daily notes live at the root, and some captures happen inside them. Auto mode
+looks at each one **once, the morning after its date**, for related notes and
+suggestions only. A daily note is never moved and never renamed, whatever
+triage says, and it is not looked at again when it changes later. Today's note
+is never looked at: it is still being written.
 
-### 7. Where the move is allowed — **ask**
+### 7. Where the move is allowed: the root, plus folders the user names — **decided 2026-09-25**
 
-Moves are in: the user asked for "when all seems clear, just do it". The
-question is where. The recommendation is `"/" = "L4"` and nothing else. Auto
-mode then files loose captures, and never takes a note out of a folder the user
-chose. A folder can be raised to L4 later, one at a time, once the root has
-earned it.
+Moves are in: the user asked for "when all seems clear, just do it". They may
+start from the root (`"/" = "L4"`) and from any folder the user raises to L4 in
+`trust.toml`. That list is the user's to write; `adopt` does not propose one.
+Auto mode's `[auto] folders` defaults to exactly the L4 folders plus `"/"`, so
+the two lists cannot drift apart unnoticed. A folder at L2 or L3 in
+`[auto] folders` gets proposals only.
 
 ## Milestones
 
@@ -176,7 +178,8 @@ shows what auto mode *would* look at and why each of the rest was passed over.
 `tiro auto on|off` records `since` in `state.json`.
 - **Done when:** on a copy of the real vault, switching it on queues nothing;
   a new note at the root is queued 30 minutes after its last edit and not
-  before; a note in `uzh/` or `Roam/` is never queued; a note with `tiro:` is
+  before; yesterday's daily note is queued once, and today's never; a note in
+  a folder not listed is never queued; a note with `tiro:` is
   queued once, by the explicit rule, not twice.
 
 ### M1 — Auto triage, propose only (½ day)
