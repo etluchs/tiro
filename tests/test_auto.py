@@ -187,6 +187,24 @@ def test_with_obsidian_closed_a_note_that_might_move_waits(on, vault: Path) -> N
     assert _scan(on)[0]  # not marked as looked at: the next run tries again
 
 
+def test_a_machine_failure_is_tried_again_next_run(on, vault: Path) -> None:
+    from tiro.agent import AgentUnavailable
+
+    class Down(ByNote):
+        def run(self, request):
+            raise AgentUnavailable("network down")
+
+    _capture(vault, "capture.md")
+    record = _run(on, Down({}))
+    assert _entry(record, "capture.md").outcome == "blocked"
+    assert [j.rel for j in _scan(on)[0]] == ["capture.md"]
+
+
+def test_tiros_own_folder_is_never_an_auto_folder(on) -> None:
+    assert "Tiro/" not in on.auto_folders()
+    assert on.auto_folders() == ("/",)
+
+
 def test_the_users_requests_go_first_and_auto_takes_what_is_left(on, vault: Path) -> None:
     for i in range(8):
         _capture(vault, f"capture-{i}.md", f"note {i}\n")

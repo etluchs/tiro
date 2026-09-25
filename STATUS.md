@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault, then iterations 2 and 3 built on top. **273 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault, then iterations 2 and 3 built on top. **275 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested

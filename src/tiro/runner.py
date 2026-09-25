@@ -39,6 +39,8 @@ class Outcome:
     wrote_block: list[str] = field(default_factory=list)
     #: where the note went, when the job moved it.
     moved_to: str = ""
+    #: blocked by the machine, not the material: the note runs again by itself.
+    retry: bool = False
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -453,7 +455,8 @@ def execute_job(
         detail = f"unexpected failure: {type(exc).__name__}: {exc}"
         _block_note(config, job, detail, run_id, retry=retry)
         _commit_block(git, job, run_id)
-        return Outcome("blocked", detail + (" — retries by itself" if retry else ""))
+        return Outcome("blocked", detail + (" — retries by itself" if retry else ""),
+                       retry=retry)
 
 
 def _execute(
@@ -512,7 +515,8 @@ def _execute(
         retry = is_machine(exc)
         _block_note(config, job, str(exc), run_id, retry=retry)
         _commit_block(git, job, run_id)
-        return Outcome("blocked", str(exc) + (" — retries by itself" if retry else ""))
+        return Outcome("blocked", str(exc) + (" — retries by itself" if retry else ""),
+                       retry=retry)
 
     result = gate.check(
         config, git, ops,
@@ -651,7 +655,9 @@ def _block_note(config: Config, job: Job, why: str, run_id: str, *,
     text = protocol.set_key(text, "tiro/run", run_id)
     if not retry:
         text = protocol.set_key(text, "tiro/hash", protocol.user_hash(text))
-    _atomic_write(note, text)
+    # A retry is bookkeeping: left looking freshly edited, it would sit out
+    # the typing guard, and auto mode's settle time, for a write of Tiro's own.
+    _atomic_write(note, text, keep_mtime=note.stat().st_mtime if retry else None)
 
 
 def once(
@@ -725,12 +731,15 @@ def once(
                 record.skipped.append({"rel": job.rel, "why": f"{attempts} attempts today already"})
                 continue
             state["attempts"][key] = attempts + 1
-            if job.trigger == "auto":
-                auto.mark_looked(state, job.rel, _local_day(now))
             _save_state(config, state)
 
             outcome = execute_job(config, git, ops, agent, job, run_id=run_id,
                                   state=state)
+            # Counted as looked at only once it was. A note the user was typing
+            # in, or one the machine failed on, is tried again next run — the
+            # note says so, and the attempts cap still bounds it.
+            if job.trigger == "auto" and outcome.outcome != "skipped" and not outcome.retry:
+                auto.mark_looked(state, job.rel, _local_day(now))
             record.add(journal.Entry(job.verb, job.rel, outcome.outcome,
                                      outcome.detail, outcome.commit, outcome.usage,
                                      trigger=job.trigger, moved_to=outcome.moved_to))

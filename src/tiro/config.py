@@ -235,8 +235,10 @@ class Config:
         folder."""
         if self.auto.folders is not None:
             return self.auto.folders
+        # ``Tiro/`` is Tiro's own surface, never looked at, whatever its level.
         l4 = sorted(f for f, level in self.trust.folders.items()
-                    if level == "L4" and f != ROOT)
+                    if level == "L4" and f != ROOT
+                    and as_vault_path(f).rstrip("/") != "Tiro")
         return (ROOT, *l4)
 
     @classmethod

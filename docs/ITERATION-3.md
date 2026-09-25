@@ -24,7 +24,7 @@ Design rationale: [DESIGN.md](DESIGN.md). Before this: [ITERATION-2](ITERATION-2
 
 ## Where it stands: 2026-09-25
 
-M0 to M4 are built, with 35 tests in `tests/test_auto.py`. **What is left is
+M0 to M4 are built, with 37 tests in `tests/test_auto.py`. **What is left is
 the user's:** raise `"/"` (and any other folders) to L4 in `.tiro/trust.toml`,
 run `tiro auto on`, and live with it for a week (M5).
 

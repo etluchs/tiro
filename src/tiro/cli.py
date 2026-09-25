@@ -328,17 +328,16 @@ def cmd_auto(args: argparse.Namespace) -> int:
     config = _config(args)
     with run_lock(config.tiro_dir / "lock"):
         state = runner._load_state(config)
-        if args.switch == "on":
-            auto.switch_on(state)
+        if args.switch in ("on", "off"):
+            (auto.switch_on if args.switch == "on" else auto.switch_off)(state)
             runner._save_state(config, state)
-        elif args.switch == "off":
-            auto.switch_off(state)
-            runner._save_state(config, state)
+            _commit_ours(config, f"tiro auto {args.switch}", "auto", [".tiro/state.json"])
     for line in auto.status_lines(config, state):
         print(line)
     if args.switch == "on":
-        print("\nNotes written from now on are looked at once they have been quiet "
-              f"{config.auto.settle_minutes} minutes. Nothing older is touched.")
+        print("\nNotes written or edited from now on are looked at once they have "
+              f"been quiet {config.auto.settle_minutes} minutes. An old note you "
+              "edit counts as edited. Notes nobody touches are never looked at.")
         if not any(config.trust.permits(
                 "x.md" if f == "/" else f.rstrip("/") + "/x.md", auto.MOVE_FROM_TRUST)
                 for f in config.auto_folders()):
