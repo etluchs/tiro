@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Protocol
 
 from tiro.config import Config
+from tiro.failure import MachineFailure
 
 _JSON_FENCE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -45,6 +46,12 @@ DENIED_TOOLS = ("Write", "Edit", "NotebookEdit", "Bash")
 
 class AgentError(Exception):
     """The agent could not be run, or did not answer in the required shape."""
+
+
+class AgentUnavailable(AgentError, MachineFailure):
+    """The agent could not be run at all — the SDK missing, the network down,
+    the model unreachable. Distinct from an agent that ran and could not do the
+    job, which is about the material and waits for the user."""
 
 
 @dataclass(frozen=True)
@@ -236,7 +243,7 @@ class ClaudeAgentRunner:
         try:
             from claude_agent_sdk import ClaudeAgentOptions, query
         except ImportError as exc:  # pragma: no cover - depends on the extra
-            raise AgentError(
+            raise AgentUnavailable(
                 "claude-agent-sdk is not installed; pip install 'tiro[agent]'"
             ) from exc
 
@@ -246,21 +253,31 @@ class ClaudeAgentRunner:
         final: Usage | None = None  # the ResultMessage's own totals, if any
         cost: float | None = None
 
-        async for message in query(prompt=request.skill, options=options):
-            for block in getattr(message, "content", []) or []:
-                text = getattr(block, "text", None)
-                if text:
-                    chunks.append(text)
-            raw = getattr(message, "usage", None)
-            # Only ResultMessage has total_cost_usd, so it is how we tell the
-            # run's totals from one turn's — adding both would double-count.
-            if hasattr(message, "total_cost_usd"):
-                if raw:
-                    final = Usage.from_sdk(raw)
-                if message.total_cost_usd is not None:
-                    cost = float(message.total_cost_usd)
-            elif raw:
-                per_turn.add(Usage.from_sdk(raw))
+        try:
+            async for message in query(prompt=request.skill, options=options):
+                for block in getattr(message, "content", []) or []:
+                    text = getattr(block, "text", None)
+                    if text:
+                        chunks.append(text)
+                raw = getattr(message, "usage", None)
+                # Only ResultMessage has total_cost_usd, so it is how we tell the
+                # run's totals from one turn's — adding both would double-count.
+                if hasattr(message, "total_cost_usd"):
+                    if raw:
+                        final = Usage.from_sdk(raw)
+                    if message.total_cost_usd is not None:
+                        cost = float(message.total_cost_usd)
+                elif raw:
+                    per_turn.add(Usage.from_sdk(raw))
+        except AgentError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the SDK's failures are many
+            # The model could not be reached or the SDK fell over: the network,
+            # a rate limit, an expired login, the CLI process dying. None of
+            # that is about the note, so the note retries by itself.
+            raise AgentUnavailable(
+                f"the agent could not run: {type(exc).__name__}: {exc}"
+            ) from exc
 
         output = parse_result("\n".join(chunks))
         output.usage = final or per_turn

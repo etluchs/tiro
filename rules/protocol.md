@@ -16,7 +16,7 @@ tiro/hash: 8f3c…                  # hash of the USER's content at that time
 ---
 ```
 
-Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`. Anything else
+Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`, `connect`. Anything else
 is blocked with "unknown verb". A body tag `#tiro/research` is read as
 `tiro: research` anywhere in the note, so Obsidian's tag pane doubles as the
 queue. The looser `#tiro research` that people actually type is read too, but
@@ -25,7 +25,10 @@ A `#tiro` followed by anything else is not a request, and `lint` names it so
 the user finds out.
 
 Job-specific keys use the same namespace: `tiro/jira` holds a dispatched issue
-key, `tiro/id` the note's stable uuid.
+key, `tiro/id` the note's stable uuid, `tiro/filed` where `file` put the note,
+and `tiro/index` marks a folder index (its value is the folder). An index is
+not a request: it carries no verb and is never queued; the runner rebuilds its
+block, `index`, after the jobs of each run.
 
 `tiro` itself — the verb — is the user's key. The runner refuses it from a
 skill's output, so no job can queue the next one: `spec` cannot become

@@ -92,6 +92,12 @@ class Git:
 
     def commit(self, paths: list[str], message: str, trailers: dict[str, str]) -> str | None:
         """Commit exactly these paths. Returns the sha, or None if nothing changed."""
+        # A path that neither exists nor is tracked has nothing to stage — the
+        # source of a move whose note was never committed. Naming it anyway makes
+        # `git add` refuse the whole commit.
+        paths = [p for p in paths
+                 if (self.repo / p).exists()
+                 or self("ls-files", "--error-unmatch", "--", p, check=False).strip()]
         if not paths:
             return None
         self("add", "--", *paths)
@@ -101,34 +107,6 @@ class Git:
         body = message.rstrip() + "\n\n" + "\n".join(f"{k}: {v}" for k, v in trailers.items())
         self("commit", "-q", "-m", body)
         return self.head()
-
-    def restore(self, paths: list[str]) -> None:
-        """Put tracked files back as committed. **Never removes anything.**
-
-        An untracked file is either the user's (a note they wrote and have not
-        committed) or one Tiro made. Telling them apart is not something git can
-        do for us, so restore does not try: it leaves untracked files alone, and
-        the caller names the ones Tiro created via ``discard``. Deleting a
-        user's uncommitted note to tidy up after ourselves would break the first
-        rule in the constitution.
-        """
-        for path in paths:
-            if self("ls-files", "--error-unmatch", "--", path, check=False).strip():
-                self("checkout", "--", path, check=False)
-
-    def discard(self, paths: list[str]) -> None:
-        """Remove files Tiro created during this job, and only those.
-
-        Used for the destination of a move that has to be undone. A tracked
-        path is never discarded — that would be a deletion.
-        """
-        for path in paths:
-            target = self.repo / path
-            if not target.exists():
-                continue
-            if self("ls-files", "--error-unmatch", "--", path, check=False).strip():
-                continue
-            target.unlink()
 
     def push(self) -> tuple[bool, str]:
         done = subprocess.run(

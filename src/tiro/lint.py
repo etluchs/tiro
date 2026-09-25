@@ -19,6 +19,7 @@ from pathlib import Path
 
 import re
 
+from tiro import index as folder_index
 from tiro import protocol
 from tiro.config import Config, in_folder
 from tiro.journal import HEADER
@@ -180,20 +181,31 @@ def _orphans(vault: Path) -> list[str]:
     Daily notes are excluded as *targets* for a different reason: nothing links
     to a daily note by design, so in a vault that keeps a diary they are the
     whole list, and the notes that are actually adrift never surface.
+
+    Folder indexes are Tiro's bookkeeping kept in the user's folders, and are
+    excluded both ways for the same reason as ``Tiro/``: an index links to every
+    note in its folder, so counting it would make every orphan disappear the
+    day the index is made — and nothing links to an index but the user.
     """
     index = Index(vault)
     linked: set[str] = set()
+    indexes: set[str] = set()
     for rel in sorted(index.paths):
         if not rel.endswith(".md") or rel.startswith(OURS):
             continue
         text = (vault / rel).read_text(encoding="utf-8", errors="replace")
-        for link in iter_links(text):
+        if folder_index.is_index(text):
+            indexes.add(rel)
+            continue
+        # Links in Tiro's blocks are proposals, not the user's links: a
+        # `connect` block that names an orphan has not un-orphaned it.
+        for link in iter_links(protocol.strip_blocks(text)):
             target = index.resolve(link.target, from_rel=rel)
             if target and target != rel:
                 linked.add(target)
     return sorted(
         rel for rel in index.paths
-        if rel.endswith(".md") and rel not in linked
+        if rel.endswith(".md") and rel not in linked and rel not in indexes
         and not rel.startswith(OURS) and not is_daily(rel)
     )
 

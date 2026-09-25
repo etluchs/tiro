@@ -22,7 +22,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-VERBS = ("triage", "file", "research", "distill", "spec", "dispatch")
+VERBS = ("triage", "file", "research", "distill", "spec", "dispatch", "connect")
 STATUSES = ("queued", "working", "done", "blocked", "needs-input")
 
 FENCE = "---"

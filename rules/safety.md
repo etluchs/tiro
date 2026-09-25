@@ -63,9 +63,14 @@ back and the note is marked `blocked`:
 5. Every wikilink that resolved before the job still resolves.
 6. The note's mtime is unchanged since the job read it.
 
-Rolling back restores tracked files and removes only paths Tiro itself created
-this run. An untracked note may be one the user wrote and has not committed, and
-git cannot tell us which — so rollback never deletes to tidy up after itself.
+Undoing a job puts back what Tiro changed, and nothing else. It does not use
+`git checkout`: HEAD lacks every edit the user has not committed, so restoring
+it reverts the user along with Tiro. Each job records the bytes of every file
+before and after Tiro writes it, and undo restores a file only if it is still
+exactly as Tiro left it. A file that has changed since — the user saving, or
+Obsidian doing something nobody predicted — is named in the note and left as
+found. A file is removed only if the record shows Tiro created it and nobody has
+touched it since.
 
 ## Concurrency with a human
 
@@ -76,6 +81,9 @@ Obsidian is open while Tiro runs.
 3. Write via temp file and atomic rename.
 4. Tiro's own bookkeeping writes preserve mtime, so its housekeeping never looks
    like the user typing.
+5. The gate's "before" is taken after the agent returns, not when the job
+   starts. The agent cannot write, so whatever changes while it thinks is the
+   user's, and is neither blamed on the job nor undone.
 
 ## Irreversible effects
 

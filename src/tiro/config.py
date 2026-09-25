@@ -164,6 +164,29 @@ class LintConfig:
 
 
 @dataclass(frozen=True)
+class ReflectConfig:
+    """How often ``reflect`` reads the correction log, and how much agreement
+    it wants before proposing a rule. Three is a guess (ITERATION-2 M2); every
+    proposal records the threshold that produced it, so it can be revisited
+    from evidence."""
+
+    threshold: int = 3
+    every_days: int = 7
+
+
+@dataclass(frozen=True)
+class IndexConfig:
+    """Folders that get a Map of Content, and what the note is called.
+
+    ``note`` is a template: ``{name}`` is the folder's own name. The index lives
+    inside the folder it lists, so it is found where it is needed.
+    """
+
+    folders: tuple[str, ...] = ()
+    note: str = "{name} — Index"
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     """The tiro repo."""
@@ -172,6 +195,8 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     dispatch: DispatchConfig = field(default_factory=DispatchConfig)
     lint: LintConfig = field(default_factory=LintConfig)
+    reflect: ReflectConfig = field(default_factory=ReflectConfig)
+    index: IndexConfig = field(default_factory=IndexConfig)
     jobs: dict[str, dict] = field(default_factory=dict)
     trust: TrustMap = field(default_factory=TrustMap)
 
@@ -216,6 +241,9 @@ class Config:
             agent=AgentConfig(**raw.get("agent", {})),
             dispatch=DispatchConfig(**raw.get("dispatch", {})),
             lint=LintConfig(**raw.get("lint", {})),
+            reflect=ReflectConfig(**raw.get("reflect", {})),
+            index=IndexConfig(**{**raw.get("index", {}),
+                                 "folders": tuple(raw.get("index", {}).get("folders", ()))}),
             jobs=raw.get("jobs", {}),
             trust=trust,
         )

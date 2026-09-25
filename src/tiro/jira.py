@@ -27,6 +27,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tiro.failure import MachineFailure
+
 TIMEOUT = 60.0
 
 #: Every field Tiro will send. A payload naming anything else is rejected rather
@@ -43,6 +45,15 @@ PROVENANCE_LABEL = "tiro"
 class JiraError(Exception):
     """Something went wrong reaching Jira. Always blocks the note; never retried
     blindly, because a retry is how duplicates are made."""
+
+
+class JiraDown(JiraError, MachineFailure):
+    """acli could not be reached, or Jira could not be asked. Nothing was
+    created — every raise of this happens before or instead of a create — so
+    retrying is safe: the label search runs first on the next attempt.
+
+    A create that returned no key is deliberately *not* this: Jira did
+    something, Tiro cannot say what, and a person should look."""
 
 
 @dataclass
@@ -135,14 +146,14 @@ class Acli:
 
     def _run(self, command: str, **params: str) -> tuple[str, str]:
         if not self.exe:
-            raise JiraError("acli is not installed; it belongs in the dev image")
+            raise JiraDown("acli is not installed; it belongs in the dev image")
         args = [part.format(**params) for part in self.COMMANDS[command]]
         try:
             done = subprocess.run(
                 [self.exe, *args], capture_output=True, text=True, timeout=TIMEOUT
             )
         except subprocess.TimeoutExpired as exc:
-            raise JiraError(f"acli {command} timed out after {TIMEOUT:g}s") from exc
+            raise JiraDown(f"acli {command} timed out after {TIMEOUT:g}s") from exc
         return done.stdout or "", done.stderr or ""
 
     def authenticated(self) -> tuple[bool, str]:
@@ -161,12 +172,12 @@ class Acli:
         out, err = self._run("search", jql=jql)
         if not out.strip():
             if err.strip():
-                raise JiraError(f"acli search failed: {err.strip().splitlines()[0][:200]}")
+                raise JiraDown(f"acli search failed: {err.strip().splitlines()[0][:200]}")
             return []
         try:
             data = json.loads(out)
         except json.JSONDecodeError as exc:
-            raise JiraError(f"acli search returned output we cannot read: {exc}") from exc
+            raise JiraDown(f"acli search returned output we cannot read: {exc}") from exc
         return _keys(data)
 
     def create(self, payload: Payload, *, project: str, workdir: Path) -> str:

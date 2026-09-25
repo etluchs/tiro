@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault. **164 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault, then iteration 2 built on top. **238 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -13,11 +13,15 @@ PyYAML and pytest.
 | **The chassis** | lock → rebase → scan → plan → per-job [run → apply → gate → commit] → journal → push |
 | **The gate** | every hostile diff it exists to stop, applied directly to a working tree and refused: deletion, undeclared paths, trust violations, broken links, corrupted frontmatter, unauthorised moves |
 | **The agent layer** | read-only on the vault, structured result, swappable for a scripted stand-in — which is how the whole loop is tested without a model. The tool surface is two lists in `agent.py` and is asserted by `test_agent.py`: no `Bash`, no write tools, no settings file read |
-| **Six skills** | triage, file, research, distill, spec, dispatch |
+| **Seven skills** | triage, file, research, distill, spec, dispatch, connect |
+| **reflect, accept, reject** | weekly, or `tiro reflect`: corrections grouped by direction, three agreeing notes make a proposal naming them, any opposing evidence holds it back, a rejected one is never made again. `Tiro/Proposals.md` is the board. Only `tiro accept` writes `rules.md` |
+| **Retry** | a note blocked by the machine (no SDK, no network, Obsidian closed, acli unreachable) carries no hash and runs again by itself; one the agent could not do waits for the user |
+| **index** | a Map of Content per folder in `[index]`, no model, one line per note; running twice commits nothing |
+| **connect** | links and contradictions for one note, each with a verbatim passage from both sides that the runner finds or drops |
 | **lint** | broken links, orphans, protocol problems, duplicates, stale inbox, stuck notes, leftovers, requests Tiro could not read, with a trend column. Daily notes are a class of their own and never count as orphans or leftovers |
 | **dispatch** | payload validation, preview mode, idempotency by frontmatter then JQL label, and the crash window tested by killing the process between create and write-back |
 | **adopt** | read-only survey of a real vault: folders, daily-note home, inbox, archives, keys, tags, plugins, leftovers. Drafts `rules.md`, `trust.toml`, the `[lint]` section and `.gitignore` lines into `.tiro/proposals/adopt/` |
-| **The CLI** | `status`, `once`, `lint`, `doctor`, `adopt`, `undo`, `strip` |
+| **The CLI** | `status`, `once`, `lint`, `doctor`, `adopt`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
 
 ## What is written but unverified
 
@@ -58,10 +62,10 @@ Obsidian moves a linked note it rewrites the link in every note that pointed at
 it, and those notes are not in the job's declared paths. That is now handled —
 the backlinks are computed before the move, declared, and judged at the move's
 permission rather than the write rule's, since a link rewrite is a consequence
-of a move the user authorised rather than Tiro editing someone's prose. And a
-gate failure now rolls back everything the job touched, not only what it
-declared, because an undeclared change is exactly the case where leaving it in
-place does damage. `backlinks` is the one adapter command still never run.
+of a move the user authorised rather than Tiro editing someone's prose. A
+failed move is undone file by file from Tiro's own record, including the links
+it predicted; a file nobody predicted is named and left alone (decision 5).
+`backlinks` is the one adapter command still never run.
 
 One limitation worth knowing: the CLI's `unresolved` JSON names the broken
 target but not the note holding it, so on that backend `lint` cannot say where
@@ -69,13 +73,14 @@ a broken link lives. The filesystem backend can, and gives a line number.
 
 ## Not built
 
-`tiro chat`, `watch` mode, `reflect`, `index`, `connect`, `tiro accept` and
-`tiro reject`. Planned in [docs/ITERATION-2.md](docs/ITERATION-2.md).
+`tiro chat` and `watch` mode.
 
-The correction log (ITERATION-2 M0) **is** built and running, so evidence has
-started accruing for `reflect`. Three jobs have never been run even once: `distill`, `spec`, and `dispatch`
-against a live Jira. Until `dispatch` runs, iteration 1's acceptance
-criterion 7 cannot be judged.
+Iteration 2's code is done (see [docs/ITERATION-2.md](docs/ITERATION-2.md)).
+What is left of it is the user's: M1, running `dispatch` live against the real
+Jira site, and M6, the week. Four jobs have never been run against a real
+vault even once: `distill`, `spec`, `connect`, and `dispatch` against a live
+Jira. `reflect` has nothing to read until the correction log has a week in it.
+Until `dispatch` runs, iteration 1's acceptance criterion 7 cannot be judged.
 
 ## First run
 
@@ -112,8 +117,18 @@ These were made while building and are not in the design doc:
    destination folder may be new.
 4. **The agent may not write `tiro`.** The verb is the user's key; if a skill
    could set it, `spec` could queue its own `dispatch`.
-5. **Rollback never deletes.** An untracked file may be a note the user wrote
-   five minutes ago and has not committed, and git cannot tell us which.
+5. **Undo puts back bytes, not HEAD, and only Tiro's.** Rollback used to be
+   `git checkout`, and HEAD lacks every edit the user has not committed — which,
+   with nothing in Obsidian committing for them, is most edits. A failed job
+   reverted the question they had just added; the guard that noticed them typing
+   threw the typing away; and an edit to another note during a job was restored
+   along with Tiro's work. Now each job records every file's bytes before and
+   after Tiro writes it (`undo.py`), and undo restores a file only if it is still
+   exactly as Tiro left it. Anything else has been touched since — by the user,
+   or by Obsidian in a way nobody predicted, and the two cannot be told apart —
+   so it is named in the note and left as found. The same record is why undo
+   can remove a file without breaking never #1: only one Tiro's record shows did
+   not exist before the job and nobody has touched since.
 6. **The root can be the inbox.** The trust key `"/"` names files directly in
    the vault root. Daily notes (`YYYY-MM-DD`) are a class: never filed, never
    stale, never orphans, and an empty one is the plugin's doing.
@@ -127,6 +142,23 @@ These were made while building and are not in the design doc:
    sessions a human opens in this repo. Tiro reads no settings file at all, and
    its tool surface lives in `agent.py` (DESIGN §3.6). The docs used to conflate
    the two, which made the deny list there look load-bearing when it is not.
+10. **A machine failure is not the note's fault.** A block from a missing SDK,
+   a dead network, a closed Obsidian or an unreachable acli writes no hash, so
+   the note runs again by itself once the machine is back; the daily attempts
+   cap stops a loop. Anything else, a bug in Tiro included, is about the job
+   and waits for the user. The classes live in `failure.py`.
+11. **Rules change by proposal only.** `reflect` counts; it never edits
+   `rules.md`. A direction is Tiro's folder → the user's, one per note; one
+   note moved both ways holds the direction back rather than cancelling it
+   silently. A rejected proposal is remembered with its reason.
+12. **An index asserts nothing it cannot read off the filesystem**, and uses no
+   model. It is Tiro's block in a note the user may write around, and lint
+   ignores it, or the orphan count would collapse the day one appeared.
+13. **`connect` is checked, not trusted.** The agent's suggestions reach the
+   note only with a verbatim passage from each side that the runner finds in
+   the user's own text; the runner writes the block, capped, and counts what it
+   dropped. Quotations are written as text so a link inside one cannot break.
+   Links in any Tiro block are proposals, and lint does not count them.
 
 ## What the real vault taught
 
