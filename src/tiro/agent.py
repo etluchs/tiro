@@ -62,7 +62,7 @@ class JobRequest:
     skill: str
     vault: Path
     max_turns: int = 30
-    model: str = "claude-opus-5"
+    model: str = "claude-opus-5-5"
     effort: str | None = None
     extra: dict = field(default_factory=dict)
 

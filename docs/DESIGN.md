@@ -177,7 +177,7 @@ code is then a small thing — the protocol, the scan, the gate, the journal.
 None of the three is trusted on its exit code; each call is verified against the
 world afterwards.
 
-Model: `claude-opus-5` for `research` and `spec`; the same model at
+Model: `claude-opus-5-5` for `research` and `spec`; the same model at
 `effort: "low"` for `triage`, which is a classification job. One model means one
 prompt cache. Per-job budgets are set in `jobs.toml`.
 
@@ -719,6 +719,6 @@ notification, and it arrives wherever the vault syncs.
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
 2. **Three setup values, not design questions:** the site
    (`<something>.atlassian.net`), the project key, and the default issue type.
-3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
+3. **Cost ceiling.** `research` at `claude-opus-5-5` on a busy inbox is the only
    job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
    right number needs one week of real traffic.

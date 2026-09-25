@@ -137,7 +137,7 @@ class RunConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    model: str = "claude-opus-5"
+    model: str = "claude-opus-5-5"
     max_turns: int = 30
 
 

@@ -19,7 +19,10 @@ max_tokens_per_day = 2000000
 push = true
 
 [agent]
-model = "claude-opus-5"
+# The SDK runs its own bundled copy of Claude Code, not the `claude` on your
+# PATH, and a new model needs a new enough copy. If a job says the model is not
+# supported, `uv lock --upgrade-package claude-agent-sdk && uv sync --all-extras`.
+model = "claude-opus-5-5"
 max_turns = 30
 
 [jobs.triage]
