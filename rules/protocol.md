@@ -26,6 +26,14 @@ only at the end of a line, so that "#tiro file it tomorrow" stays a sentence.
 A `#tiro` followed by anything else is not a request, and `lint` names it so
 the user finds out.
 
+**A note may ask for several things.** The `tiro:` value and every body tag
+are all read, each once, and run in one pass, one job and one commit each, in
+the order written, except that `file` always runs last because it moves the
+note. `tiro/done` lists the requests already answered at the note's current
+content, so a request that failed on the machine is retried alone and the
+others are not run twice. A note from before `tiro/done` existed counts the
+jobs named on its blocks.
+
 Job-specific keys use the same namespace: `tiro/jira` holds a dispatched issue
 key, `tiro/id` the note's stable uuid, `tiro/filed` where `file` put the note,
 and `tiro/index` marks a folder index (its value is the folder). An index is
@@ -38,8 +46,9 @@ skill's output, so no job can queue the next one: `spec` cannot become
 
 ## The one rule
 
-> Act on a note when `tiro:` is present **and** (`tiro/hash` is absent **or**
-> `tiro/hash` differs from the hash of the note's current user content).
+> Act on a request when it is present **and** (`tiro/hash` is absent **or**
+> `tiro/hash` differs from the hash of the note's current user content **or**
+> the request is not in `tiro/done`).
 
 **User content** is the note with Tiro's state keys and every Tiro-owned block
 removed. Two keys stay in because the user edits them: the `tiro:` verb
@@ -85,8 +94,10 @@ view, greppable, stable.
 <!-- tiro:end id=a4f2 -->
 ```
 
-One block per job per note, keyed by `id`. Re-running replaces the block in
-place: no duplicates, clean diffs.
+One block per job per note, keyed by `id`, which is `<tiro/id>-<job>`.
+Re-running a job replaces its block in place: no duplicates, clean diffs, and
+one job never overwrites another's. A block from before per-job ids is keyed
+by the note's id alone, and its own job keeps replacing it there.
 
 ## Questions
 

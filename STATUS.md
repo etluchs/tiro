@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault, then iterations 2 and 3 built on top. **275 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault, then iterations 2 and 3 built on top. **284 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -176,6 +176,13 @@ These were made while building and are not in the design doc:
    has changed is now committed as they left it before the job (`tiro: keep`),
    and undo leaves the journal commit alone. That commit holds `state.json`,
    and reverting it switched auto mode off along with everything else.
+
+17. **A note may ask for several things, and gets all of them.** A note with
+   `#tiro/research` and `#tiro/file` ran the research, recorded itself as done,
+   and dropped the filing without a word. Every request is now read, `file`
+   runs last, and `tiro/done` records which have been answered at this
+   content. Each job has its own block (`<id>-<job>`), because research had
+   also overwritten the triage proposal on the same note.
 
 ## What the real vault taught
 

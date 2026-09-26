@@ -90,7 +90,9 @@ def _save_state(config: Config, state: dict) -> None:
 
 
 def _attempts_key(job: Job, day: str) -> str:
-    return f"{day}|{job.rel}"
+    """Per request, so a note asking for three things is not out of attempts
+    after one pass."""
+    return f"{day}|{job.rel}|{job.verb}"
 
 
 def _spend_today(state: dict, day: str) -> dict:
@@ -213,13 +215,15 @@ def apply_output(
         output.block = (output.block.rstrip() + "\n\n" + line).strip()
 
     if output.block.strip():
-        text = protocol.upsert_block(text, job=job.verb, id=note_id, body=output.block)
+        bid = protocol.block_id(text, note_id, job.verb)
+        text = protocol.upsert_block(text, job=job.verb, id=bid, body=output.block)
         if wrote_block is not None:
-            wrote_block.append(note_id)
+            wrote_block.append(bid)
     for key, value in output.keys.items():
         text = protocol.set_key(text, key, value)
     text = protocol.set_key(text, "tiro/status", output.status)
     text = protocol.set_key(text, "tiro/run", run_id)
+    text = protocol.mark_done(text, job.verb)
     # The hash is of the user's content, so it must be computed from the note as
     # it now stands — after our block and keys, which by construction do not
     # affect it.
@@ -650,10 +654,14 @@ def _block_note(config: Config, job: Job, why: str, run_id: str, *,
                 "Tiro tries again on its next run.")
     else:
         body = f"> [!failure] Tiro · {job.verb} · blocked\n> {why}"
-    text = protocol.upsert_block(text, job=job.verb, id=note_id, body=body)
+    text = protocol.upsert_block(text, job=job.verb,
+                                 id=protocol.block_id(text, note_id, job.verb), body=body)
     text = protocol.set_key(text, "tiro/status", "blocked")
     text = protocol.set_key(text, "tiro/run", run_id)
     if not retry:
+        # Answered, if only with "cannot": the other requests on the note are
+        # not held up by this one, and this one waits for the user.
+        text = protocol.mark_done(text, job.verb)
         text = protocol.set_key(text, "tiro/hash", protocol.user_hash(text))
     # A retry is bookkeeping: left looking freshly edited, it would sit out
     # the typing guard, and auto mode's settle time, for a write of Tiro's own.

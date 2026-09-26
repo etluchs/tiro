@@ -204,6 +204,83 @@ def verb(text: str) -> str | None:
     return m.group(1).lower() if m else None
 
 
+def verbs(text: str) -> list[str]:
+    """Every request on the note, in the order they will run.
+
+    A note may ask for several things: `#tiro/research` on one line and
+    `#tiro/file` at the end. Reading only the first, as ``verb`` does, dropped
+    the rest without a word. The frontmatter value comes first, then body tags
+    in document order, each once. ``file`` always runs last, since it moves
+    the note away from under anything after it. ``hold`` is not a job and is
+    left out.
+    """
+    found: list[str] = []
+    keys = read_keys(text)
+    if keys.get("tiro"):
+        found.append(keys["tiro"])
+    body = _request_surface(text)
+    tags = [(m.start(), m.group(1).lower()) for m in _BODY_TAG.finditer(body)]
+    tags += [(m.start(), m.group(1).lower()) for m in _BODY_TAG_LOOSE.finditer(body)]
+    for _, word in sorted(tags):
+        if word not in found:
+            found.append(word)
+    found = [v for v in found if v != HOLD]
+    return sorted(found, key=lambda v: v == "file")
+
+
+def done_verbs(text: str) -> set[str]:
+    """The requests already answered at the note's recorded hash.
+
+    Kept in ``tiro/done``. A note from before that key existed has one: the
+    job named on each of its blocks.
+    """
+    keys = read_keys(text)
+    if "tiro/done" in keys:
+        return {v for v in re.split(r"[,\s]+", keys["tiro/done"]) if v}
+    jobs = {b.job for b in find_blocks(text)}
+    # No blocks at all: a job that answered with nothing. Then the hash alone
+    # said "done", for whatever was asked.
+    return jobs or set(verbs(text))
+
+
+def pending(text: str) -> list[str]:
+    """The requests on this note that still need a job: all of them if the
+    user's content changed since Tiro last recorded it, otherwise the ones not
+    yet answered at that content."""
+    wanted = verbs(text)
+    if not wanted:
+        return []
+    if unseen(text):
+        return wanted
+    done = done_verbs(text)
+    return [v for v in wanted if v not in done]
+
+
+def mark_done(text: str, verb: str) -> str:
+    """Record that ``verb`` has been answered at the note's current content.
+
+    Call before the new hash is written: if the content changed since the last
+    one, earlier answers were to older content and are dropped.
+    """
+    done = set() if unseen(text) else done_verbs(text)
+    done.add(verb)
+    order = [v for v in verbs(text) if v in done] + sorted(done - set(verbs(text)))
+    return set_key(text, "tiro/done", ", ".join(order))
+
+
+def block_id(text: str, note_id: str, verb: str) -> str:
+    """The id of this job's block on this note: one block per job.
+
+    Blocks used to be keyed by the note's id alone, so every job on a note
+    wrote into the same block and research replaced triage's proposal. A
+    block from then keeps its id when its own job writes it again, so it is
+    replaced in place rather than left beside a new one.
+    """
+    if any(b.id == note_id and b.job == verb for b in find_blocks(text)):
+        return note_id
+    return f"{note_id}-{verb}"
+
+
 def _request_surface(text: str) -> str:
     """The part of a note a body tag may be read from: the user's prose, with
     Tiro's own blocks and any code removed. Tiro's output must never be able
@@ -327,12 +404,11 @@ def user_hash(text: str) -> str:
 def needs_work(text: str) -> bool:
     """The one rule (DESIGN section 4.2).
 
-    Act when a verb is present and either we have never hashed this note or the
-    user's content has changed since we did.
+    Act when a verb is present and either we have never hashed this note, the
+    user's content has changed since we did, or that verb has not yet been
+    answered at this content (``pending``).
     """
-    if verb(text) is None:
-        return False
-    return unseen(text)
+    return bool(pending(text))
 
 
 def unseen(text: str) -> bool:

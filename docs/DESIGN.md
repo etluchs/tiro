@@ -351,6 +351,10 @@ Tiro-owned blocks removed. Tiro's own output therefore cannot trigger Tiro. This
 is the detail that makes the rule work; get it wrong and the loop never
 terminates.
 
+**Several requests on one note** are each a job, run in one pass with `file`
+last. `tiro/done` records which have been answered at the current hash, so a
+request is also acted on when it is missing from that list.
+
 **A second trigger, since iteration 3.** With auto mode on, an untagged note in
 an auto folder is triaged under the same hash rule, once it has settled, if it
 was written after the mode was switched on. The runner picks the verb, and it
@@ -373,7 +377,8 @@ reading view, trivially greppable, and stable across Obsidian versions:
 <!-- tiro:end id=a4f2 -->
 ```
 
-Re-running replaces the block with the same `id` in place. No duplicates, clean
+Each job on a note has its own block, `id` = `<tiro/id>-<job>`, so research never
+overwrites a triage proposal. Re-running replaces the block with the same `id` in place. No duplicates, clean
 diffs, and `tiro strip <note>` removes every trace of Tiro from a note.
 
 ### 4.4 Asking the user
