@@ -28,6 +28,7 @@ REQUIRED_TRUST = {
     "spec": "L2",
     "dispatch": "L2",
     "connect": "L2",
+    "order": "L2",
 }
 MAY_MOVE = {"file"}
 

@@ -100,6 +100,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     for job in jobs:
         mark = " " if job.valid_verb else "!"
         print(f"  {mark} {job.verb:<9} {job.rel}  ({job.reason})")
+        if job.order:
+            words = " ".join(job.order.split())
+            print(f"              “{words[:70]}{'…' if len(words) > 70 else ''}”")
     for skip in skipped:
         print(f"    skip      {skip.rel}  ({skip.why})")
     return 0
