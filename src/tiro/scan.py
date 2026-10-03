@@ -51,10 +51,11 @@ class Job:
     #: it. The verb of an auto job is always ``triage``, and the runner, not the
     #: model, is what chose it.
     trigger: str = "request"
+    order: str = ""  # the user's own words, if any (protocol.order)
 
     @property
     def valid_verb(self) -> bool:
-        return self.verb in protocol.VERBS
+        return self.verb in protocol.VERBS or self.verb == protocol.ORDER
 
 
 @dataclass(frozen=True)
@@ -117,5 +118,6 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
         for verb in wanted:
             jobs.append(Job(rel=rel, verb=verb, note_id=protocol.note_id(text),
                             hash_before=protocol.user_hash(text),
-                            mtime=path.stat().st_mtime, reason=reason))
+                            mtime=path.stat().st_mtime, reason=reason,
+                            order=protocol.order(text)))
     return jobs, skipped

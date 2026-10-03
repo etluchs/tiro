@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault, then iterations 2 and 3 built on top. **284 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault, then iterations 2 and 3 and free-form orders built on top. **307 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -13,7 +13,8 @@ PyYAML and pytest.
 | **The chassis** | lock → rebase → scan → plan → per-job [run → apply → gate → commit] → journal → push |
 | **The gate** | every hostile diff it exists to stop, applied directly to a working tree and refused: deletion, undeclared paths, trust violations, broken links, corrupted frontmatter, unauthorised moves |
 | **The agent layer** | read-only on the vault, structured result, swappable for a scripted stand-in — which is how the whole loop is tested without a model. The tool surface is two lists in `agent.py` and is asserted by `test_agent.py`: no `Bash`, no write tools, no settings file read |
-| **Seven skills** | triage, file, research, distill, spec, dispatch, connect |
+| **Eight skills** | triage, file, research, distill, spec, dispatch, connect, and `order` for anything said in words |
+| **Orders** | `tiro: <a sentence>` or a `> [!tiro]` callout: free-form, one block on its own note, at most a proposed destination. Next to a verb, the callout refines that job. `tiro status` shows the words before they run |
 | **reflect, accept, reject** | weekly, or `tiro reflect`: corrections grouped by direction, three agreeing notes make a proposal naming them, any opposing evidence holds it back, a rejected one is never made again. `Tiro/Proposals.md` is the board. Only `tiro accept` writes `rules.md` |
 | **Retry** | a note blocked by the machine (no SDK, no network, Obsidian closed, acli unreachable) carries no hash and runs again by itself; one the agent could not do waits for the user |
 | **index** | a Map of Content per folder in `[index]`, no model, one line per note; running twice commits nothing |
@@ -160,7 +161,6 @@ These were made while building and are not in the design doc:
    the user's own text; the runner writes the block, capped, and counts what it
    dropped. Quotations are written as text so a link inside one cannot break.
    Links in any Tiro block are proposals, and lint does not count them.
-
 14. **Auto mode chooses the verb, and it is always `triage`.** "Note content
    is data" holds because the runner, not the model, decides a job exists.
 15. **An auto move departs from decision 8.** Its destination is triage's own
@@ -183,6 +183,13 @@ These were made while building and are not in the design doc:
    runs last, and `tiro/done` records which have been answered at this
    content. Each job has its own block (`<id>-<job>`), because research had
    also overwritten the triage proposal on the same note.
+
+18. **Orders are free-form; what they may write is not.** A sentence in
+   `tiro:` or a `> [!tiro]` callout runs as the job `order`. The words decide
+   what the agent does; the code decides what reaches the vault: one block on
+   that note and `tiro/filed-to`, other keys dropped and named. A single
+   unknown word stays a typo, because it nearly always is. The verbs remain for
+   what needs the user's signature or the runner's checks.
 
 ## What the real vault taught
 

@@ -326,8 +326,10 @@ tiro/hash: 8f3c…                        # hash of the USER's content at that t
 ---
 ```
 
-`tiro:` is a verb, one of a closed set (§8). Anything else is `blocked` with
-"unknown verb". Tags work as an alternative trigger for people who prefer them —
+`tiro:` is a verb, one of a closed set (§8), or a sentence: an **order** in the
+user's own words, which runs as the job `order` (§8). A single unknown word is
+`blocked` with "unknown verb", since it is almost always a typo. A `> [!tiro]`
+callout in the body is an order too, or refines the verb when there is one. Tags work as an alternative trigger for people who prefer them —
 `#tiro/research` in the body is read as `tiro: research` — because Obsidian's tag
 pane then doubles as the queue.
 
@@ -615,6 +617,9 @@ plain markdown file.
 ## 8. Jobs
 
 A closed vocabulary. Each verb is one skill, one budget, one declared path scope.
+Everything else the user wants is an **order**: free-form, and confined to the
+note it is written on. The verbs exist for what an order may not do — move a
+note, file an issue — and for jobs whose output the runner checks (`connect`).
 
 | Verb | Trust | What it does | Ships in |
 |---|---|---|---|
@@ -627,6 +632,7 @@ A closed vocabulary. Each verb is one skill, one budget, one declared path scope
 | `lint` | L0 | Whole-vault health: broken links, orphans, frontmatter violations, duplicate titles, notes stuck in the inbox. Read-only report to `Tiro/Health.md` | 1 |
 | `reflect` | L2 | Weekly: read the correction log, propose rule changes (§7). Counting, no model; only `tiro accept` edits `rules.md` | 2 |
 | `index` | L3 | Maintain Maps of Content / index notes for an area as its contents change. No model: a listing, one line per note. Created only at L3, updated wherever one exists, never recreated once deleted | 2 |
+| `order` | L2 | Whatever the user asked in their own words, as one block on that note. May propose `tiro/filed-to`; may set no other key, move nothing, touch no other note. Names the verb that would do what it cannot | 2 |
 | `connect` | L2 | Propose links between notes that should know about each other; surface contradictions between notes. Per note, on request. Every suggestion carries a verbatim passage from both notes, which the runner finds or drops; at most five links and three contradictions; the runner writes the block | 2 (planned for 3; moved in at the user's request, with those checks as the condition) |
 
 **Where this goes next.** The README's ambition is notes turning into "actionable

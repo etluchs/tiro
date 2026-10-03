@@ -28,6 +28,9 @@ VERBS = ("triage", "file", "research", "distill", "spec", "dispatch", "connect")
 #: so auto mode never looks at the note and nothing is queued for it.
 HOLD = "hold"
 WORDS = (*VERBS, HOLD)
+#: Not a word the user writes: the job a free-form order runs as. Anything in
+#: ``tiro:`` with a space in it is an order, and so is a ``> [!tiro]`` callout.
+ORDER = "order"
 STATUSES = ("queued", "working", "done", "blocked", "needs-input")
 
 FENCE = "---"
@@ -189,19 +192,75 @@ def _require_tiro_key(key: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def verb(text: str) -> str | None:
-    """The requested verb, from the ``tiro:`` key or a ``#tiro/<verb>`` body tag.
+_ORDER_CALLOUT = re.compile(r"^[ \t]*>[ \t]*\[!tiro\][+-]?[ \t]*(.*)$", re.I)
+_CALLOUT_LINE = re.compile(r"^[ \t]*>[ \t]?(.*)$")
 
-    The frontmatter key wins when both are present. An unrecognised value is
-    returned as-is so the caller can block the note with a useful message
-    rather than silently ignoring a typo.
+
+def _is_order(value: str) -> bool:
+    """A verb is one word. Anything longer is the user saying what they want."""
+    return len(value.split()) > 1
+
+
+def verb(text: str) -> str | None:
+    """The requested job: a verb from the ``tiro:`` key or a ``#tiro/<verb>``
+    body tag, or :data:`ORDER` for a free-form order.
+
+    The frontmatter key wins when both are present. A single unrecognised word
+    is returned as-is so the caller can block the note with a useful message
+    rather than silently ignoring a typo: ``tiro: reserch`` is almost always a
+    misspelt verb, not an order, and saying so costs no model time.
     """
     keys = read_keys(text)
     if "tiro" in keys and keys["tiro"]:
-        return keys["tiro"]
+        value = keys["tiro"].strip()
+        return ORDER if _is_order(value) else value
     body = _request_surface(text)
     m = _BODY_TAG.search(body) or _BODY_TAG_LOOSE.search(body)
-    return m.group(1).lower() if m else None
+    if m:
+        return m.group(1).lower()
+    return ORDER if _callout_order(body) else None
+
+
+def order(text: str) -> str:
+    """The user's own words for this job, or "".
+
+    For an order this is the whole request. Next to a verb it refines the job —
+    ``tiro: dispatch`` with ``> [!tiro] make it a Bug`` — and cannot widen it:
+    the runner applies the verb's checks whatever the words say.
+
+    From the ``tiro:`` value when it is a sentence, and from the last
+    ``> [!tiro]`` callout in the user's prose (the newest, when the note is a
+    conversation). Never from Tiro's blocks or from code.
+    """
+    parts = []
+    value = (read_keys(text).get("tiro") or "").strip()
+    if _is_order(value):
+        parts.append(value)
+    callout = _callout_order(_request_surface(text))
+    if callout:
+        parts.append(callout)
+    return "\n\n".join(parts)
+
+
+def _callout_order(body: str) -> str:
+    found: list[list[str]] = []
+    current: list[str] | None = None
+    for line in body.split("\n"):
+        m = _ORDER_CALLOUT.match(line)
+        if m:
+            current = [m.group(1).strip()]
+            found.append(current)
+            continue
+        cont = _CALLOUT_LINE.match(line) if current is not None else None
+        if cont:
+            current.append(cont.group(1).rstrip())
+        else:
+            current = None
+    for lines in reversed(found):
+        words = "\n".join(lines).strip()
+        if words:
+            return words
+    return ""
 
 
 def verbs(text: str) -> list[str]:
@@ -213,17 +272,24 @@ def verbs(text: str) -> list[str]:
     in document order, each once. ``file`` always runs last, since it moves
     the note away from under anything after it. ``hold`` is not a job and is
     left out.
+
+    A sentence in ``tiro:`` is :data:`ORDER`, as in ``verb``. A ``> [!tiro]``
+    callout is one only on a note that asks for nothing else; next to a verb
+    it refines that job instead.
     """
     found: list[str] = []
     keys = read_keys(text)
-    if keys.get("tiro"):
-        found.append(keys["tiro"])
+    value = (keys.get("tiro") or "").strip()
+    if value:
+        found.append(ORDER if _is_order(value) else value)
     body = _request_surface(text)
     tags = [(m.start(), m.group(1).lower()) for m in _BODY_TAG.finditer(body)]
     tags += [(m.start(), m.group(1).lower()) for m in _BODY_TAG_LOOSE.finditer(body)]
     for _, word in sorted(tags):
         if word not in found:
             found.append(word)
+    if not found and _callout_order(body):
+        found.append(ORDER)
     found = [v for v in found if v != HOLD]
     return sorted(found, key=lambda v: v == "file")
 

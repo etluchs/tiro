@@ -9,17 +9,32 @@ Two keys the user writes, three Tiro writes back:
 
 ```yaml
 ---
-tiro: research                    # the request — a verb from the closed set
+tiro: research                    # the request — a verb, or a sentence (an order)
 tiro/status: done                 # queued | working | done | blocked | needs-input
 tiro/run: 2026-09-21T14-03Z-a4f2  # which run last touched this note
 tiro/hash: 8f3c…                  # hash of the USER's content at that time
 ---
 ```
 
-Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`, `connect`. Anything else
-is blocked with "unknown verb". One more value is not a verb: `tiro: hold` (or
-`#tiro/hold`) means "leave this note alone". It is never queued, and auto mode
-never looks at the note. A body tag `#tiro/research` is read as
+Verbs: `triage`, `file`, `research`, `distill`, `spec`, `dispatch`, `connect`. A
+single other word is blocked with "unknown verb": it is almost always a typo.
+One more word is not a verb: `tiro: hold` (or `#tiro/hold`) means "leave this
+note alone". It is never queued, and auto mode never looks at the note.
+
+**Orders.** Anything longer is an order, in the user's own words:
+`tiro: translate this into German`. So is a `> [!tiro]` callout in the body,
+which needs no frontmatter at all and reads like a note to a secretary:
+
+```markdown
+> [!tiro] Find the paper this argument comes from and link it.
+```
+
+The newest such callout is the current order, so a note can carry a
+conversation: answer, follow-up, answer. Next to a verb, the callout refines
+that job (`tiro: dispatch` with `> [!tiro] make it a Bug`) and cannot widen it.
+An order runs as the job `order`: it writes one block on its own note and may
+propose a destination in `tiro/filed-to`, and nothing else. Moving the note or
+filing an issue still takes the verb, which the user writes. A body tag `#tiro/research` is read as
 `tiro: research` anywhere in the note, so Obsidian's tag pane doubles as the
 queue. The looser `#tiro research` that people actually type is read too, but
 only at the end of a line, so that "#tiro file it tomorrow" stays a sentence.

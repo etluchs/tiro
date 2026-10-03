@@ -32,6 +32,21 @@ says why; the note itself is not written, not even to mark it blocked.
 Without this rule, a vault with no folder structure would need every folder
 listed before a single request could run.
 
+## An order is the user's words, and no wider than a block
+
+A free-form order (`tiro: <sentence>`, or a `> [!tiro]` callout) is the one
+place note text is an instruction. What it can do is fixed in code, not by the
+words: one block on its own note, and at most a proposed `tiro/filed-to`. Any
+other key is dropped and the journal says so — an order that could write
+`tiro/jira` could make `dispatch` believe an issue exists. The agent is
+read-only whatever the order says, and the gate judges the job like any other.
+
+The residual risk is a pasted page that happens to contain a `> [!tiro]`
+callout. It gets a block on that one note and the read-only tools, the web
+ones included — which is no more than a page pasted into a `research` note can
+already steer. The journal names every order that ran, and `tiro status` shows
+the words before they run.
+
 ## A move is two permissions
 
 Taking a note *out of* where the user put it is the risky half — that is what
