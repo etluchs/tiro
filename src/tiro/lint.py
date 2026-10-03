@@ -214,8 +214,8 @@ def _protocol_problems(rel: str, text: str) -> list[Finding]:
     out: list[Finding] = []
     keys = protocol.read_keys(text)
 
-    verb = keys.get("tiro")
-    if verb and verb not in protocol.VERBS:
+    verb = protocol.verb(text)
+    if verb and verb not in protocol.VERBS and verb != protocol.ORDER:
         out.append(Finding("unknown verb", rel, f"`{verb}`"))
 
     status = keys.get("tiro/status")
@@ -237,7 +237,8 @@ def _protocol_problems(rel: str, text: str) -> list[Finding]:
 
     if protocol.looks_like_request(text):
         out.append(Finding("unrecognised request", rel,
-                           "a `#tiro` tag with no verb Tiro knows; try `#tiro research`"))
+                           "a `#tiro` tag with no verb Tiro knows; try `#tiro research`, "
+                           "or say what you want in a `> [!tiro]` callout"))
 
     return out
 

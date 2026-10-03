@@ -47,10 +47,11 @@ class Job:
     hash_before: str
     mtime: float
     reason: str
+    order: str = ""  # the user's own words, if any (protocol.order)
 
     @property
     def valid_verb(self) -> bool:
-        return self.verb in protocol.VERBS
+        return self.verb in protocol.VERBS or self.verb == protocol.ORDER
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,7 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
                 mtime=path.stat().st_mtime,
                 reason="new request" if "tiro/hash" not in protocol.read_keys(text)
                 else "user content changed since the last run",
+                order=protocol.order(text),
             )
         )
     return jobs, skipped
