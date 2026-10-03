@@ -62,7 +62,7 @@ class JobRequest:
     skill: str
     vault: Path
     max_turns: int = 30
-    model: str = "claude-opus-5"
+    model: str = "claude-opus-5-5"
     effort: str | None = None
     extra: dict = field(default_factory=dict)
 
@@ -131,6 +131,11 @@ class JobOutput:
     payload: dict | None = None
     detail: str = ""
     usage: Usage = field(default_factory=Usage)
+    #: triage only: the model's claim that its destination is clearly right,
+    #: and why. Auto mode moves a note on it only after the runner has checked
+    #: the reason for itself (``auto.move_problem``); on its own it moves nothing.
+    obvious: bool = False
+    basis: dict = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, data: dict) -> "JobOutput":
@@ -153,6 +158,8 @@ class JobOutput:
             keys=keys,
             payload=data.get("payload"),
             detail=str(data.get("detail", ""))[:200],
+            obvious=data.get("obvious") is True,
+            basis=data.get("basis") if isinstance(data.get("basis"), dict) else {},
         )
 
 

@@ -88,7 +88,8 @@ def config(vault: Path):
     """
     from dataclasses import replace
 
-    from tiro.config import Config, LintConfig, RunConfig
+    from tiro.config import AutoConfig, Config, IndexConfig, LintConfig, RunConfig
 
     return replace(Config.load(root=REPO, vault=vault),
-                   run=RunConfig(), lint=LintConfig())
+                   run=RunConfig(), lint=LintConfig(), index=IndexConfig(),
+                   auto=AutoConfig())

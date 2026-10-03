@@ -60,6 +60,16 @@ def test_a_callout_next_to_a_verb_refines_it() -> None:
     assert p.verb("#tiro/research\n\n> [!tiro] in German please\n") == "research"
 
 
+def test_an_order_is_one_of_the_requests_a_note_makes() -> None:
+    # `verbs` drives the queue, so it must see orders as `verb` does: a
+    # sentence in the key is the job `order`, and a callout is one only on a
+    # note that asks for nothing else.
+    assert p.verbs("---\ntiro: translate this\n---\n\nbody #tiro/file\n") == [p.ORDER, "file"]
+    assert p.verbs("> [!tiro] find the source\n") == [p.ORDER]
+    assert p.verbs("> [!tiro] make it short\n\n#tiro/distill\n") == ["distill"]
+    assert p.verbs("---\ntiro: hold\n---\n\n> [!tiro] find the source\n") == []
+
+
 @pytest.mark.parametrize("text", [
     "> [!tiro]\n> \n\nnothing asked\n",
     "```\n> [!tiro] an example in a code block\n```\n",

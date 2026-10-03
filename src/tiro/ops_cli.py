@@ -47,6 +47,7 @@ class CliResult:
 class ObsidianCliOps:
     name = "obsidian-cli"
     authoritative = True
+    can_move = True
 
     #: Command surface, in one place, so that correcting it is a one-line edit.
     COMMANDS = {

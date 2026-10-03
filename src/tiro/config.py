@@ -137,7 +137,7 @@ class RunConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    model: str = "claude-opus-5"
+    model: str = "claude-opus-5-5"
     max_turns: int = 30
 
 
@@ -187,6 +187,25 @@ class IndexConfig:
 
 
 @dataclass(frozen=True)
+class AutoConfig:
+    """Auto mode: notes looked after without being asked for (ITERATION-3).
+
+    Switched on and off by ``tiro auto``, which records *since when* in
+    ``.tiro/state.json``; nothing written before that is ever looked at. These
+    are the bounds once it is on.
+
+    ``folders`` left unset means the vault root plus every L4 folder, so the
+    list of places Tiro may move notes out of and the list it looks at cannot
+    drift apart unnoticed. A folder listed here below L4 gets proposals only,
+    and one below L2 is not looked at, since Tiro could not write the block.
+    """
+
+    folders: tuple[str, ...] | None = None
+    settle_minutes: int = 30
+    max_per_run: int = 5
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     """The tiro repo."""
@@ -197,6 +216,7 @@ class Config:
     lint: LintConfig = field(default_factory=LintConfig)
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
     index: IndexConfig = field(default_factory=IndexConfig)
+    auto: AutoConfig = field(default_factory=AutoConfig)
     jobs: dict[str, dict] = field(default_factory=dict)
     trust: TrustMap = field(default_factory=TrustMap)
 
@@ -209,6 +229,17 @@ class Config:
     def notes_dir(self) -> Path:
         """Tiro's own user-facing notes."""
         return self.vault / "Tiro"
+
+    def auto_folders(self) -> tuple[str, ...]:
+        """Where auto mode looks: as configured, or the root plus every L4
+        folder."""
+        if self.auto.folders is not None:
+            return self.auto.folders
+        # ``Tiro/`` is Tiro's own surface, never looked at, whatever its level.
+        l4 = sorted(f for f, level in self.trust.folders.items()
+                    if level == "L4" and f != ROOT
+                    and as_vault_path(f).rstrip("/") != "Tiro")
+        return (ROOT, *l4)
 
     @classmethod
     def load(cls, root: Path | None = None, vault: Path | None = None) -> "Config":
@@ -244,6 +275,12 @@ class Config:
             reflect=ReflectConfig(**raw.get("reflect", {})),
             index=IndexConfig(**{**raw.get("index", {}),
                                  "folders": tuple(raw.get("index", {}).get("folders", ()))}),
+            auto=_auto(raw.get("auto", {})),
             jobs=raw.get("jobs", {}),
             trust=trust,
         )
+
+
+def _auto(raw: dict) -> AutoConfig:
+    folders = raw.get("folders")
+    return AutoConfig(**{**raw, "folders": None if folders is None else tuple(folders)})

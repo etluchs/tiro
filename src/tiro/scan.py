@@ -47,6 +47,10 @@ class Job:
     hash_before: str
     mtime: float
     reason: str
+    #: ``request`` when the user tagged the note; ``auto`` when auto mode chose
+    #: it. The verb of an auto job is always ``triage``, and the runner, not the
+    #: model, is what chose it.
+    trigger: str = "request"
     order: str = ""  # the user's own words, if any (protocol.order)
 
     @property
@@ -85,8 +89,8 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
         except (OSError, UnicodeDecodeError) as exc:
             skipped.append(Skipped(rel, f"unreadable: {exc}"))
             continue
-        verb = protocol.verb(text)
-        if verb is None:
+        wanted = protocol.pending(text)
+        if protocol.verb(text) is None or not protocol.verbs(text):
             continue
         if config.trust.level_for(rel) == "L0":
             # L0 is "Tiro does not touch this". A tag inside is a note, not a
@@ -94,25 +98,26 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
             skipped.append(Skipped(rel, f"in an L0 folder; Tiro does not write there"))
             continue
         status = protocol.read_keys(text).get("tiro/status", "")
-        if status == "needs-input" and not protocol.needs_work(text):
+        if status == "needs-input" and not wanted:
             skipped.append(Skipped(rel, "waiting on the user"))
             continue
-        if not protocol.needs_work(text):
+        if not wanted:
             continue
         age = now - path.stat().st_mtime
         if age < config.run.skip_recent_seconds:
             skipped.append(Skipped(rel, f"modified {age:.0f}s ago; user may be typing"))
             continue
-        jobs.append(
-            Job(
-                rel=rel,
-                verb=verb,
-                note_id=protocol.note_id(text),
-                hash_before=protocol.user_hash(text),
-                mtime=path.stat().st_mtime,
-                reason="new request" if "tiro/hash" not in protocol.read_keys(text)
-                else "user content changed since the last run",
-                order=protocol.order(text),
-            )
-        )
+        if "tiro/hash" not in protocol.read_keys(text):
+            reason = "new request"
+        elif protocol.unseen(text):
+            reason = "user content changed since the last run"
+        else:
+            reason = "asked for and not yet done"
+        # One job per request, in the order ``verbs`` gives: several on one
+        # note run in one pass, one commit each, and `file` last.
+        for verb in wanted:
+            jobs.append(Job(rel=rel, verb=verb, note_id=protocol.note_id(text),
+                            hash_before=protocol.user_hash(text),
+                            mtime=path.stat().st_mtime, reason=reason,
+                            order=protocol.order(text)))
     return jobs, skipped

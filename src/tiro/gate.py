@@ -55,6 +55,9 @@ TAGGED_NOTE_TRUST = "L2"
 #: message naming the folder and the level.
 MOVE_FROM_TRUST = "L1"
 MOVE_TO_TRUST = "L3"
+#: The move auto mode initiates, with no tag on the note: this is the one L4
+#: was kept for. ``auto.MOVE_FROM_TRUST`` is the same value, checked before.
+AUTO_MOVE_FROM_TRUST = "L4"
 
 #: Tiro's own state directory. Not vault content: the run ledger, run records,
 #: and the payload a dispatch would post. It is committed by the journal step
@@ -159,6 +162,8 @@ def check(
     before: Snapshot,
     moved: tuple[str, str] | None = None,
     rewritten: set[str] | None = None,
+    trigger: str = "request",
+    new_folder: bool = False,
 ) -> GateResult:
     """Validate everything the job touched. Every failure is collected, not just
     the first: a job that broke three rules should say so once."""
@@ -174,17 +179,25 @@ def check(
     # which is most notes worth filing.
     relinked = {as_vault_path(p) for p in (rewritten or set())}
 
-    if moved and verb not in MAY_MOVE:
+    auto = trigger == "auto"
+    if moved and verb not in MAY_MOVE and not (auto and verb == "triage"):
         result.fail(f"`{verb}` moved a note; only `file` may do that")
+    # Auto mode moves without a word from the user on the note, so it needs
+    # what never #2 asks for: an L4 source, the accept given per folder in
+    # advance. And it never creates a folder: that is a decision about the
+    # vault's shape, which is the user's.
+    leave = AUTO_MOVE_FROM_TRUST if auto else MOVE_FROM_TRUST
+    if moved and auto and new_folder:
+        result.fail(f"auto mode made a new folder for {move_dst}; only the user does that")
     if moved:
         problem = destination_problem(config, move_dst)
         if problem:
             result.fail(f"cannot file to {move_dst}: {problem}")
-        if not config.trust.permits(move_src, MOVE_FROM_TRUST):
+        if not config.trust.permits(move_src, leave):
             result.fail(
                 f"cannot move a note out of {move_src}: that folder is "
-                f"{config.trust.level_for(move_src)}, and moving out needs "
-                f"{MOVE_FROM_TRUST}"
+                f"{config.trust.level_for(move_src)}, and moving out "
+                f"{'unasked ' if auto else ''}needs {leave}"
             )
         if not config.trust.permits(move_dst, MOVE_TO_TRUST):
             result.fail(
@@ -206,7 +219,7 @@ def check(
             continue  # judged by the move rules above, not by the write rule
         # The tagged note itself is judged with its tag counted as consent;
         # any other path the job touched is judged by its folder alone.
-        allowed = (note_permits(config, path, required) if path == note_rel
+        allowed = (note_permits(config, path, required) if path == note_rel and not auto
                    else config.trust.permits(path, required))
         if not allowed:
             result.fail(

@@ -2,7 +2,7 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault, then iteration 2 built on top. **260 tests, all passing** on Python 3.11+ with no dependencies beyond
+vault, then iterations 2 and 3 and free-form orders built on top. **307 tests, all passing** on Python 3.11+ with no dependencies beyond
 PyYAML and pytest.
 
 ## What works, and is tested
@@ -22,7 +22,8 @@ PyYAML and pytest.
 | **lint** | broken links, orphans, protocol problems, duplicates, stale inbox, stuck notes, leftovers, requests Tiro could not read, with a trend column. Daily notes are a class of their own and never count as orphans or leftovers |
 | **dispatch** | payload validation, preview mode, idempotency by frontmatter then JQL label, and the crash window tested by killing the process between create and write-back |
 | **adopt** | read-only survey of a real vault: folders, daily-note home, inbox, archives, keys, tags, plugins, leftovers. Drafts `rules.md`, `trust.toml`, the `[lint]` section and `.gitignore` lines into `.tiro/proposals/adopt/` |
-| **The CLI** | `status`, `once`, `lint`, `doctor`, `adopt`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
+| **auto mode** | `tiro auto on`: untagged notes in the root and L4 folders are triaged once they settle, and filed when the runner can check the basis. Daily notes once, the morning after. *Done unasked* heads the journal. Never run against the real vault yet |
+| **The CLI** | `status`, `once`, `lint`, `doctor`, `adopt`, `auto`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
 
 ## What is written but unverified
 
@@ -160,7 +161,30 @@ These were made while building and are not in the design doc:
    the user's own text; the runner writes the block, capped, and counts what it
    dropped. Quotations are written as text so a link inside one cannot break.
    Links in any Tiro block are proposals, and lint does not count them.
-14. **Orders are free-form; what they may write is not.** A sentence in
+14. **Auto mode chooses the verb, and it is always `triage`.** "Note content
+   is data" holds because the runner, not the model, decides a job exists.
+15. **An auto move departs from decision 8.** Its destination is triage's own
+   `tiro/filed-to`, which is the one place the model's output picks a path.
+   The model's `obvious` is required and never enough: the runner checks the
+   basis (a rule in `rules.md`, or two existing notes in the destination
+   folder), the source is L4, the destination L3 and existing, and the note
+   has never been filed, corrected or undone. Tiro moves a note at most once.
+16. **Undo takes Tiro's work away, not the user's.** `tiro undo` is a
+   `git revert`, and a job's commit used to carry the user's uncommitted
+   words, so undo reverted them too. On a note that was never committed,
+   the usual case for a fresh capture, it deleted the note. A note the user
+   has changed is now committed as they left it before the job (`tiro: keep`),
+   and undo leaves the journal commit alone. That commit holds `state.json`,
+   and reverting it switched auto mode off along with everything else.
+
+17. **A note may ask for several things, and gets all of them.** A note with
+   `#tiro/research` and `#tiro/file` ran the research, recorded itself as done,
+   and dropped the filing without a word. Every request is now read, `file`
+   runs last, and `tiro/done` records which have been answered at this
+   content. Each job has its own block (`<id>-<job>`), because research had
+   also overwritten the triage proposal on the same note.
+
+18. **Orders are free-form; what they may write is not.** A sentence in
    `tiro:` or a `> [!tiro]` callout runs as the job `order`. The words decide
    what the agent does; the code decides what reaches the vault: one block on
    that note and `tiro/filed-to`, other keys dropped and named. A single

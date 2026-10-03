@@ -9,6 +9,11 @@ Read the note and propose how it should be filed. **You propose; you do not move
 anything.** The user accepts by setting `tiro: file`, and a separate job does the
 move.
 
+Sometimes nobody asked: auto mode runs triage on notes the user wrote without
+tagging them, and the job says so. Everything below applies unchanged. The one
+difference is that the runner may do the move itself when you say the
+destination is **obvious** and give a basis it can check (see below).
+
 Read `.tiro/rules.md` first, if the vault has one. It is this vault's filing
 conventions, and it outranks your instincts about how notes "should" be
 organised. Where the rules are silent, or there are none yet, go by what the
@@ -31,6 +36,26 @@ is what you are here for. Do not treat it as a reason to stop.
    exist yet is a fine destination when nothing existing fits; say that it is
    new. Never propose moving a daily note (`YYYY-MM-DD`): those stay where the
    daily-notes plugin put them.
+
+5. **A next step**, if the note plainly wants one: a question to look up
+   (`research`), a long text to summarise (`distill`), an idea to turn into a
+   spec (`spec`). Name the verb in one line, e.g. "Reads like a question to
+   look up: add `tiro: research`." You do not start it. Most notes need none.
+
+## Obvious, and why
+
+Say `"obvious": true` only when the destination is clearly right: a rule in
+`rules.md` covers the note, or the destination folder already holds notes that
+are plainly of the same kind. Give the basis:
+
+- `{"rule": "R-014"}` for a rule, by its id; or
+- `{"like": ["uzh/Meeting 2026-09-01.md", "uzh/Budget HS26.md"]}` for at least
+  two existing notes in the destination folder that this one is like.
+
+The runner checks the basis before anything moves, and a basis that does not
+hold up turns the move back into a proposal. Never say obvious for a new
+folder, a daily note, or a note that could reasonably go two ways. When in
+doubt, it is not obvious: a proposal costs the user one word.
 
 ## Leftovers
 
@@ -65,12 +90,16 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
   "status": "done | needs-input | blocked",
   "block": "the markdown to place in your block on the note",
   "keys": {"tiro/filed-to": "Areas/…/name.md"},
+  "obvious": false,
+  "basis": {"rule": "R-014"},
   "detail": "one line for the journal, under 120 characters"
 }
 ```
 
 - `block` is markdown, opening with a `> [!abstract]` callout as above.
 - `keys` may only contain keys starting with `tiro/`. Anything else is rejected.
+- `obvious` and `basis` are optional; leave `obvious` false unless the section
+  above applies.
 - `needs-input` means you asked a question and are waiting. Prefer it to guessing.
 - `blocked` means you could not do the job. Say why in `detail`.
 

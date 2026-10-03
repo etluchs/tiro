@@ -27,6 +27,11 @@ tiro/status: done        # the reply
 ---
 ```
 
+Or tag nothing. With `tiro auto on`, Tiro looks at every new or changed note in
+the folders you open up, works out what it is and what it relates to, and files
+it when that is obvious. Where it is unsure, it proposes or asks in the note.
+Everything it did unasked is listed at the top of the day's journal.
+
 ## structure
 
 tiro
@@ -45,4 +50,6 @@ vault, in `.tiro/`, where Tiro may propose changes but never make them.
   safety model, the git strategy, how rules evolve
 - **[Iteration 1](docs/ITERATION-1.md)** — what to build first, in what order, and
   how we know it works
+- **[Iteration 2](docs/ITERATION-2.md)**: rules that learn from corrections
+- **[Iteration 3](docs/ITERATION-3.md)**: auto mode, notes looked after without a tag
 - **[Prior art](docs/PRIOR-ART.md)** — what the neighbours built and what we took

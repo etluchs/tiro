@@ -44,6 +44,13 @@ link rewriting fires (§3.4). And
 "evolving" is given a concrete mechanism — a correction log and proposed rule
 diffs the user accepts (§7). Iteration 1 moves no file the user has not accepted.
 
+*Revised in iteration 3.* In use, the one-word accept turned out to be a
+decision the user did not have time for when writing the note. The accept can
+now also be given in advance, per folder, by raising it to L4. Auto mode then
+files an untagged note, but only when the runner can check the reason and the
+destination folder already exists ([ITERATION-3](ITERATION-3.md),
+`rules/safety.md`).
+
 **② "Evolving rules" needs a home and a version.** Rules that the agent can
 rewrite silently are not rules. They live in two places with different mutability
 (§3.1), both under git, and Tiro may propose changes but never self-amend.
@@ -170,7 +177,7 @@ code is then a small thing — the protocol, the scan, the gate, the journal.
 None of the three is trusted on its exit code; each call is verified against the
 world afterwards.
 
-Model: `claude-opus-5` for `research` and `spec`; the same model at
+Model: `claude-opus-5-5` for `research` and `spec`; the same model at
 `effort: "low"` for `triage`, which is a classification job. One model means one
 prompt cache. Per-job budgets are set in `jobs.toml`.
 
@@ -346,6 +353,15 @@ Tiro-owned blocks removed. Tiro's own output therefore cannot trigger Tiro. This
 is the detail that makes the rule work; get it wrong and the loop never
 terminates.
 
+**Several requests on one note** are each a job, run in one pass with `file`
+last. `tiro/done` records which have been answered at the current hash, so a
+request is also acted on when it is missing from that list.
+
+**A second trigger, since iteration 3.** With auto mode on, an untagged note in
+an auto folder is triaged under the same hash rule, once it has settled, if it
+was written after the mode was switched on. The runner picks the verb, and it
+is always `triage`. `rules/protocol.md` has the full conditions.
+
 ### 4.3 Tiro-owned blocks
 
 Tiro writes only between its markers, which are HTML comments — invisible in
@@ -363,7 +379,8 @@ reading view, trivially greppable, and stable across Obsidian versions:
 <!-- tiro:end id=a4f2 -->
 ```
 
-Re-running replaces the block with the same `id` in place. No duplicates, clean
+Each job on a note has its own block, `id` = `<tiro/id>-<job>`, so research never
+overwrites a triage proposal. Re-running replaces the block with the same `id` in place. No duplicates, clean
 diffs, and `tiro strip <note>` removes every trace of Tiro from a note.
 
 ### 4.4 Asking the user
@@ -700,6 +717,11 @@ notification, and it arrives wherever the vault syncs.
   since nothing else distinguishes them; and the credential carries the user's
   full Jira permissions, so `dispatch` is pinned to a single project key.
 
+- **Auto mode** (iteration 3). Tiro looks after new notes in the folders the
+  user opens up, without a tag, and files one when the runner can check that
+  the filing is obvious. The explicit protocol is unchanged, for when the user
+  is thinking about how the vault is organised.
+
 ### Open
 
 1. **Which vault?** The trust ladder defaults and the `triage` prompt need the
@@ -708,6 +730,6 @@ notification, and it arrives wherever the vault syncs.
    edit — the same adopt-don't-impose move as `obsidian-claude-pkm`.
 2. **Three setup values, not design questions:** the site
    (`<something>.atlassian.net`), the project key, and the default issue type.
-3. **Cost ceiling.** `research` at `claude-opus-5` on a busy inbox is the only
+3. **Cost ceiling.** `research` at `claude-opus-5-5` on a busy inbox is the only
    job that can get expensive. A per-day budget in `jobs.toml` is the lever; the
    right number needs one week of real traffic.

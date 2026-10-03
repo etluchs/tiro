@@ -90,16 +90,16 @@ def read(config: Config) -> list[Correction]:
     return out
 
 
-def remember_block(state: dict, note_id: str, run_id: str) -> None:
-    """Record that a block was actually written for this note.
+def remember_block(state: dict, block_id: str, run_id: str) -> None:
+    """Record that a block was actually written, by the block's id.
 
     `tiro/id` is assigned on first touch, before any block exists, so a job
     that returns an empty block leaves an id with no block — which is
     indistinguishable from the user having deleted one. Only a note Tiro
     knows it wrote a block on can have had that block rejected.
     """
-    if note_id:
-        state.setdefault("blocks", {})[note_id] = run_id
+    if block_id:
+        state.setdefault("blocks", {})[block_id] = run_id
 
 
 def remember_proposal(state: dict, note_rel: str, filed_to: str, run_id: str) -> None:
@@ -145,10 +145,13 @@ def observe(config: Config, state: dict, *, now: str | None = None) -> list[Corr
             found.append(Correction("overrode-proposal", rel, proposed, current,
                                     note_id, proposals[rel].get("run", ""), when))
 
-        wrote_block = state.get("blocks", {}).get(note_id)
-        if wrote_block and not any(b.id == note_id for b in protocol.find_blocks(text)):
-            found.append(Correction("rejected-block", rel, note_id, "deleted",
-                                    note_id, wrote_block, when))
+        # One block per job since blocks got ids of their own (``<id>-<verb>``);
+        # a block from before that is keyed by the note's id alone.
+        present = {b.id for b in protocol.find_blocks(text)}
+        for bid, wrote_block in state.get("blocks", {}).items() if note_id else ():
+            if (bid == note_id or bid.startswith(note_id + "-")) and bid not in present:
+                found.append(Correction("rejected-block", rel, bid, "deleted",
+                                        note_id, wrote_block, when))
 
     return found
 

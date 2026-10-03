@@ -23,6 +23,11 @@ import uuid
 from dataclasses import dataclass
 
 VERBS = ("triage", "file", "research", "distill", "spec", "dispatch", "connect")
+#: ``tiro: hold`` is the user saying "leave this one alone". It is a value of
+#: the user's key but not a job: the scan passes over it before a job exists,
+#: so auto mode never looks at the note and nothing is queued for it.
+HOLD = "hold"
+WORDS = (*VERBS, HOLD)
 #: Not a word the user writes: the job a free-form order runs as. Anything in
 #: ``tiro:`` with a space in it is an order, and so is a ``> [!tiro]`` callout.
 ORDER = "order"
@@ -35,7 +40,7 @@ _TIRO_KEY = re.compile(r"^(tiro(?:/[A-Za-z0-9_-]+)?)\s*:(.*)$")
 #: read only when it *is* the end of a line — "#tiro file it tomorrow" is a
 #: sentence, not a request to move the note. A ``#tiro`` followed by anything
 #: else is a near-miss, and lint reports it.
-_VERB_ALT = "|".join(VERBS)
+_VERB_ALT = "|".join(WORDS)
 _BODY_TAG = re.compile(r"(?<![\w/#])#tiro/(" + _VERB_ALT + r")(?![\w/-])", re.I)
 _BODY_TAG_LOOSE = re.compile(r"(?<![\w/#])#tiro[ \t]+(" + _VERB_ALT + r")[.!]?[ \t]*$", re.M | re.I)
 _BODY_TAG_ANY = re.compile(r"(?<![\w/#])#tiro(?!\w)", re.I)
@@ -258,6 +263,90 @@ def _callout_order(body: str) -> str:
     return ""
 
 
+def verbs(text: str) -> list[str]:
+    """Every request on the note, in the order they will run.
+
+    A note may ask for several things: `#tiro/research` on one line and
+    `#tiro/file` at the end. Reading only the first, as ``verb`` does, dropped
+    the rest without a word. The frontmatter value comes first, then body tags
+    in document order, each once. ``file`` always runs last, since it moves
+    the note away from under anything after it. ``hold`` is not a job and is
+    left out.
+
+    A sentence in ``tiro:`` is :data:`ORDER`, as in ``verb``. A ``> [!tiro]``
+    callout is one only on a note that asks for nothing else; next to a verb
+    it refines that job instead.
+    """
+    found: list[str] = []
+    keys = read_keys(text)
+    value = (keys.get("tiro") or "").strip()
+    if value:
+        found.append(ORDER if _is_order(value) else value)
+    body = _request_surface(text)
+    tags = [(m.start(), m.group(1).lower()) for m in _BODY_TAG.finditer(body)]
+    tags += [(m.start(), m.group(1).lower()) for m in _BODY_TAG_LOOSE.finditer(body)]
+    for _, word in sorted(tags):
+        if word not in found:
+            found.append(word)
+    if not found and _callout_order(body):
+        found.append(ORDER)
+    found = [v for v in found if v != HOLD]
+    return sorted(found, key=lambda v: v == "file")
+
+
+def done_verbs(text: str) -> set[str]:
+    """The requests already answered at the note's recorded hash.
+
+    Kept in ``tiro/done``. A note from before that key existed has one: the
+    job named on each of its blocks.
+    """
+    keys = read_keys(text)
+    if "tiro/done" in keys:
+        return {v for v in re.split(r"[,\s]+", keys["tiro/done"]) if v}
+    jobs = {b.job for b in find_blocks(text)}
+    # No blocks at all: a job that answered with nothing. Then the hash alone
+    # said "done", for whatever was asked.
+    return jobs or set(verbs(text))
+
+
+def pending(text: str) -> list[str]:
+    """The requests on this note that still need a job: all of them if the
+    user's content changed since Tiro last recorded it, otherwise the ones not
+    yet answered at that content."""
+    wanted = verbs(text)
+    if not wanted:
+        return []
+    if unseen(text):
+        return wanted
+    done = done_verbs(text)
+    return [v for v in wanted if v not in done]
+
+
+def mark_done(text: str, verb: str) -> str:
+    """Record that ``verb`` has been answered at the note's current content.
+
+    Call before the new hash is written: if the content changed since the last
+    one, earlier answers were to older content and are dropped.
+    """
+    done = set() if unseen(text) else done_verbs(text)
+    done.add(verb)
+    order = [v for v in verbs(text) if v in done] + sorted(done - set(verbs(text)))
+    return set_key(text, "tiro/done", ", ".join(order))
+
+
+def block_id(text: str, note_id: str, verb: str) -> str:
+    """The id of this job's block on this note: one block per job.
+
+    Blocks used to be keyed by the note's id alone, so every job on a note
+    wrote into the same block and research replaced triage's proposal. A
+    block from then keeps its id when its own job writes it again, so it is
+    replaced in place rather than left beside a new one.
+    """
+    if any(b.id == note_id and b.job == verb for b in find_blocks(text)):
+        return note_id
+    return f"{note_id}-{verb}"
+
+
 def _request_surface(text: str) -> str:
     """The part of a note a body tag may be read from: the user's prose, with
     Tiro's own blocks and any code removed. Tiro's output must never be able
@@ -381,10 +470,18 @@ def user_hash(text: str) -> str:
 def needs_work(text: str) -> bool:
     """The one rule (DESIGN section 4.2).
 
-    Act when a verb is present and either we have never hashed this note or the
-    user's content has changed since we did.
+    Act when a verb is present and either we have never hashed this note, the
+    user's content has changed since we did, or that verb has not yet been
+    answered at this content (``pending``).
     """
-    if verb(text) is None:
-        return False
+    return bool(pending(text))
+
+
+def unseen(text: str) -> bool:
+    """Tiro has never hashed this note, or the user's content has changed since.
+
+    The half of the one rule that auto mode shares: an untagged note in an auto
+    folder is looked at on exactly this condition (ITERATION-3).
+    """
     recorded = read_keys(text).get("tiro/hash")
     return not recorded or recorded != user_hash(text)
