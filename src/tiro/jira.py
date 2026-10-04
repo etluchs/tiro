@@ -14,8 +14,9 @@ written defensively at every step.
 * **Exit codes are always 0**, as with the Obsidian CLI, so nothing branches on
   returncode alone.
 
-UNVERIFIED AGAINST A LIVE JIRA. The command shapes come from the published
-`acli` reference and have not been run. They are in one place, `COMMANDS`, and
+The payload shape is the one `acli jira workitem create --generate-json`
+prints; the first live create (2026-10-04) failed on the shape guessed before
+that. The other command shapes come from the published `acli` reference. They are in one place, `COMMANDS`, and
 `tiro doctor` exercises the read-only ones.
 """
 
@@ -63,14 +64,36 @@ class Payload:
     issue_type: str
     labels: list[str] = field(default_factory=list)
 
-    def to_json(self, project: str) -> dict:
+    def to_json(self, project: str, *, adf: bool = True) -> dict:
+        """The body of `acli jira workitem create --from-json`, in the shape
+        `--generate-json` prints: `projectKey`, and a description that must be
+        ADF. ``adf=False`` keeps the description as text, for the preview the
+        user reads; the conversion is mechanical and adds nothing to review."""
         return {
-            "project": {"key": project},
+            "projectKey": project,
             "summary": self.summary,
-            "description": self.description,
+            "description": to_adf(self.description) if adf else self.description,
             "type": self.issue_type,
             "labels": sorted(set(self.labels)),
         }
+
+
+def to_adf(text: str) -> dict:
+    """Plain text as an Atlassian Document Format doc: one paragraph per block
+    between blank lines, a hard break for each line inside one. Nothing is
+    parsed as markup, so what the user signed off is what Jira shows."""
+    paragraphs = []
+    for block in text.split("\n\n"):
+        lines = [l for l in block.split("\n") if l.strip()]
+        if not lines:
+            continue  # ADF refuses empty text nodes
+        content: list[dict] = []
+        for i, line in enumerate(lines):
+            if i:
+                content.append({"type": "hardBreak"})
+            content.append({"type": "text", "text": line})
+        paragraphs.append({"type": "paragraph", "content": content})
+    return {"type": "doc", "version": 1, "content": paragraphs}
 
 
 def build_payload(

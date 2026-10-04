@@ -118,7 +118,31 @@ def _run(config, stub_output: JobOutput, vault: Path):
 def test_the_runner_sets_the_project_not_the_agent() -> None:
     payload = build_payload(_payload(), project="TIRO", default_type="Task",
                             note_rel="a.md", note_id="abc", run_id="r1")
-    assert payload.to_json("TIRO")["project"] == {"key": "TIRO"}
+    assert payload.to_json("TIRO")["projectKey"] == "TIRO"
+
+
+def test_the_payload_has_the_shape_acli_generates() -> None:
+    # `acli jira workitem create --generate-json`: `projectKey`, and a
+    # description that must be ADF. `"project": {"key": ...}` was refused live.
+    payload = build_payload(_payload(), project="TIRO", default_type="Task",
+                            note_rel="a.md", note_id="abc", run_id="r1")
+    body = payload.to_json("TIRO")
+    assert set(body) == {"projectKey", "summary", "description", "type", "labels"}
+    doc = body["description"]
+    assert doc["type"] == "doc" and doc["version"] == 1
+    assert doc["content"][0] == {"type": "paragraph",
+                                 "content": [{"type": "text", "text": "Problem"}]}
+
+
+def test_adf_keeps_lines_and_drops_empty_ones() -> None:
+    from tiro.jira import to_adf
+    doc = to_adf("Criteria\n1. one\n2. two\n\n\n\nend\n")
+    first, last = doc["content"]
+    assert [n["type"] for n in first["content"]] == [
+        "text", "hardBreak", "text", "hardBreak", "text"]
+    assert first["content"][2]["text"] == "1. one"
+    assert last["content"] == [{"type": "text", "text": "end"}]
+    assert all(n.get("text") != "" for p in doc["content"] for n in p["content"])
 
 
 def test_a_payload_naming_a_project_is_refused() -> None:

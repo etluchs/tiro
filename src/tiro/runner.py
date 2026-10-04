@@ -388,7 +388,7 @@ def _dispatch(
     if not config.dispatch.live:
         # Preview: show exactly what would be posted and stop. The user turns
         # on dispatch.live once the payloads look right.
-        body = json.dumps(payload.to_json(config.dispatch.project), indent=2)
+        body = json.dumps(payload.to_json(config.dispatch.project, adf=False), indent=2)
         output.block = (
             f"{output.block}\n\n"
             "> [!warning] Preview only — nothing has been created.\n"
