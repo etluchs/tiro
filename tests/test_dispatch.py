@@ -134,15 +134,14 @@ def test_the_payload_has_the_shape_acli_generates() -> None:
                                  "content": [{"type": "text", "text": "Problem"}]}
 
 
-def test_adf_keeps_lines_and_drops_empty_ones() -> None:
+def test_adf_formats_the_markdown_and_drops_empty_lines() -> None:
+    # The first live issue showed its markdown literally; the description is
+    # converted now (tests/test_adf.py has the rest).
     from tiro.jira import to_adf
     doc = to_adf("Criteria\n1. one\n2. two\n\n\n\nend\n")
-    first, last = doc["content"]
-    assert [n["type"] for n in first["content"]] == [
-        "text", "hardBreak", "text", "hardBreak", "text"]
-    assert first["content"][2]["text"] == "1. one"
-    assert last["content"] == [{"type": "text", "text": "end"}]
-    assert all(n.get("text") != "" for p in doc["content"] for n in p["content"])
+    assert [n["type"] for n in doc["content"]] == ["paragraph", "orderedList", "paragraph"]
+    assert len(doc["content"][1]["content"]) == 2
+    assert doc["content"][-1]["content"] == [{"type": "text", "text": "end"}]
 
 
 def test_a_payload_naming_a_project_is_refused() -> None:
