@@ -28,6 +28,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tiro import adf
 from tiro.failure import MachineFailure
 
 TIMEOUT = 60.0
@@ -67,8 +68,8 @@ class Payload:
     def to_json(self, project: str, *, adf: bool = True) -> dict:
         """The body of `acli jira workitem create --from-json`, in the shape
         `--generate-json` prints: `projectKey`, and a description that must be
-        ADF. ``adf=False`` keeps the description as text, for the preview the
-        user reads; the conversion is mechanical and adds nothing to review."""
+        ADF. ``adf=False`` keeps the description as markdown, for the preview
+        the user reads: that is what they review, and what is converted."""
         return {
             "projectKey": project,
             "summary": self.summary,
@@ -79,21 +80,10 @@ class Payload:
 
 
 def to_adf(text: str) -> dict:
-    """Plain text as an Atlassian Document Format doc: one paragraph per block
-    between blank lines, a hard break for each line inside one. Nothing is
-    parsed as markup, so what the user signed off is what Jira shows."""
-    paragraphs = []
-    for block in text.split("\n\n"):
-        lines = [l for l in block.split("\n") if l.strip()]
-        if not lines:
-            continue  # ADF refuses empty text nodes
-        content: list[dict] = []
-        for i, line in enumerate(lines):
-            if i:
-                content.append({"type": "hardBreak"})
-            content.append({"type": "text", "text": line})
-        paragraphs.append({"type": "paragraph", "content": content})
-    return {"type": "doc", "version": 1, "content": paragraphs}
+    """The description as Atlassian Document Format. It is written in markdown,
+    as the spec it comes from is, and Jira shows anything but ADF as literal
+    text — the first live issue arrived with its `##` and `**` showing."""
+    return adf.from_markdown(text)
 
 
 def build_payload(

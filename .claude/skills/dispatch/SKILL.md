@@ -12,9 +12,13 @@ that can reach Jira, and the runner posts what you return, after its own checks.
 - **Summary**: what to *do*, not what the note is about. "Add rate limiting to
   the ingest endpoint", not "Rate limiting". Under 120 characters, imperative,
   no ticket-speak.
-- **Description**: the spec's problem, acceptance criteria and non-goals as
-  plain text — Jira Cloud does the formatting. Keep the criteria numbered: they
-  are what closes the issue. Name the source note so a reader can find it.
+- **Description**: the spec's problem, acceptance criteria and non-goals, in
+  markdown. The runner converts it to Jira's format: `##` headings, `-` and
+  `1.` lists (nested by indenting), `**bold**`, `*italic*`, `` `code` ``,
+  fenced code blocks, `>` quotes and `[text](https://…)` links come through as
+  formatting. Tables do not; write them as lists. Keep the criteria numbered:
+  they are what closes the issue. Vault `[[links]]` mean nothing in Jira and
+  arrive as plain text, so name the source note in words.
 - **Type**: from the vault rules if they say, otherwise leave it out and the
   configured default is used. **Never set a project key** — a payload naming one
   is rejected.
@@ -42,7 +46,7 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
   "block": "the markdown to place in your block on the note",
   "payload": {
     "summary": "Add rate limiting to the ingest endpoint",
-    "description": "Problem…\n\nAcceptance criteria\n1. …\n\nNon-goals…\n\nSource: [[note name]]",
+    "description": "## Problem\n…\n\n## Acceptance criteria\n1. …\n2. …\n\n## Non-goals\n- …\n\nSource: the note *Rate limiting*",
     "type": "Task",
     "labels": []
   },
