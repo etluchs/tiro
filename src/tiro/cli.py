@@ -11,6 +11,7 @@ does the scan and the planning and then stops.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -121,12 +122,96 @@ def _queue(config: Config, state: dict):
     return jobs[: config.run.max_jobs] + auto_jobs[:room], skipped + auto_skipped
 
 
+def _note_rel(config: Config, name: str) -> str:
+    """A note the user named, as a vault-relative path, or ValueError saying
+    why it is not one Tiro may be asked about."""
+    raw = Path(name)
+    path = (raw if raw.is_absolute() else config.vault / raw)
+    if path.suffix != ".md":
+        path = path.with_name(path.name + ".md")
+    try:
+        rel = path.resolve().relative_to(config.vault.resolve())
+    except ValueError:
+        raise ValueError(f"`{name}` is not in the vault") from None
+    if not path.is_file():
+        raise ValueError(f"no such note: `{rel.as_posix()}`")
+    if scan.is_hidden(rel.parts) or rel.parts[0] == scan.OURS:
+        raise ValueError(f"`{rel.as_posix()}` is not a note Tiro takes requests on")
+    if config.trust.level_for(rel.as_posix()) == "L0":
+        raise ValueError(f"`{rel.as_posix()}` is in an L0 folder; Tiro does not write there")
+    return rel.as_posix()
+
+
+def _request_value(words: str) -> str:
+    """The request as a frontmatter value Obsidian will still parse."""
+    if re.fullmatch(r"[\w][\w ,.()/?!'-]*", words) and ": " not in words:
+        return words
+    if '"' not in words and "\\" not in words:
+        return f'"{words}"'
+    if "'" not in words:
+        return f"'{words}'"
+    raise ValueError("a request cannot hold both kinds of quote; drop one")
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Put a request on a note, as the user would in Obsidian: the `tiro:` key.
+    Writes the user's own key, on their say-so, and nothing else."""
+    config = _config(args)
+    words = " ".join(args.request.split())
+    try:
+        rel = _note_rel(config, args.note)
+        if not words:
+            raise ValueError("say what you want: a verb, or a sentence")
+        if len(words.split()) == 1 and words not in protocol.WORDS:
+            raise ValueError(f"`{words}` is not a verb ({', '.join(protocol.VERBS)}); "
+                             "for anything else, write a sentence")
+        value = _request_value(words)
+    except ValueError as exc:
+        print(f"not asked: {exc}")
+        return 1
+
+    path = config.vault / rel
+    text = path.read_text(encoding="utf-8")
+    current = (protocol.read_keys(text).get("tiro") or "").strip()
+    if current == words:
+        print(f"{rel} already asks for that")
+    elif current and not args.replace:
+        print(f"not asked: {rel} already asks for `{current}`. "
+              "Add --replace to ask for this instead.")
+        return 1
+    else:
+        runner._atomic_write(path, protocol.set_key(text, "tiro", value))
+        print(f"asked: {rel} — tiro: {value}")
+    print(f'next: tiro once --note "{rel}" runs it now; otherwise the next run will')
+    return 0
+
+
+def cmd_chat(args: argparse.Namespace) -> int:
+    from tiro import chat
+
+    config = _config(args)
+    try:
+        return chat.run(config, vault_override=args.vault, first=" ".join(args.message))
+    except FileNotFoundError as exc:
+        print(exc)
+        return 1
+
+
 def cmd_once(args: argparse.Namespace) -> int:
     config = _config(args)
     ops = _ops(config, args)
 
+    only = None
+    if getattr(args, "note", None):
+        try:
+            only = {_note_rel(config, n) for n in args.note}
+        except ValueError as exc:
+            print(f"not run: {exc}")
+            return 1
+
     if args.dry_run:
-        jobs, _ = _queue(config, runner._load_state(config))
+        jobs, _ = (scan.scan(config, only=only) if only is not None
+                   else _queue(config, runner._load_state(config)))
         print(f"would run {len(jobs)} job(s) with the {ops.name} backend:")
         for job in jobs:
             print(f"  {'auto' if job.trigger == 'auto' else job.verb:<9} {job.rel}")
@@ -135,7 +220,7 @@ def cmd_once(args: argparse.Namespace) -> int:
     from tiro.agent import ClaudeAgentRunner
 
     try:
-        record = runner.once(config, agent=ClaudeAgentRunner(config), ops=ops)
+        record = runner.once(config, agent=ClaudeAgentRunner(config), ops=ops, only=only)
     except LockBusy as exc:
         print(f"not this time: {exc}")
         return 0
@@ -440,7 +525,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     once = sub.add_parser("once", help="one pass over the vault")
     once.add_argument("--dry-run", action="store_true", help="plan, then stop")
+    once.add_argument("--note", action="append", metavar="NOTE",
+                      help="run only this note's requests, now (repeatable)")
     once.set_defaults(fn=cmd_once)
+
+    ask = sub.add_parser("ask", help="put a request on a note: a verb, or a sentence")
+    ask.add_argument("note", help="vault-relative path, with or without .md")
+    ask.add_argument("request", help='e.g. research, or "translate this into German"')
+    ask.add_argument("--replace", action="store_true",
+                     help="replace a different request already on the note")
+    ask.set_defaults(fn=cmd_ask)
+
+    chat_p = sub.add_parser("chat", help="talk to Tiro: Claude Code over the vault")
+    chat_p.add_argument("message", nargs="*", help="an opening message, optional")
+    chat_p.set_defaults(fn=cmd_chat)
 
     sub.add_parser("lint", help="vault health report").set_defaults(fn=cmd_lint)
     sub.add_parser("doctor", help="check the external CLIs answer").set_defaults(fn=cmd_doctor)
