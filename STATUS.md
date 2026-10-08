@@ -23,7 +23,8 @@ PyYAML and pytest.
 | **dispatch** | payload validation, preview mode, idempotency by frontmatter then JQL label, and the crash window tested by killing the process between create and write-back |
 | **adopt** | read-only survey of a real vault: folders, daily-note home, inbox, archives, keys, tags, plugins, leftovers. Drafts `rules.md`, `trust.toml`, the `[lint]` section and `.gitignore` lines into `.tiro/proposals/adopt/` |
 | **auto mode** | `tiro auto on`: untagged notes in the root and L4 folders are triaged once they settle, and filed when the runner can check the basis. Daily notes once, the morning after. *Done unasked* heads the journal. Never run against the real vault yet |
-| **The CLI** | `status`, `once`, `lint`, `doctor`, `adopt`, `auto`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
+| **The CLI** | `status`, `once` (`--note` for one note, now), `ask`, `chat`, `lint`, `doctor`, `adopt`, `auto`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
+| **chat** | Claude Code over the vault with the constitution loaded and no tool that writes a file. Bash runs `tiro` and nothing else, enforced by a hook; read-only commands run without asking, the rest are put to the user. Requests go on the note with `tiro ask`, and run with `tiro once --note` |
 
 ## What is written but unverified
 
@@ -75,7 +76,8 @@ a broken link lives. The filesystem backend can, and gives a line number.
 
 ## Not built
 
-`tiro chat` and `watch` mode.
+`watch` mode, deliberately: chat covers the quick interactions it was for, and
+a sleeping laptop runs neither.
 
 Iteration 2's code is done (see [docs/ITERATION-2.md](docs/ITERATION-2.md)).
 What is left of it is the user's: M1, running `dispatch` live against the real
@@ -190,6 +192,13 @@ These were made while building and are not in the design doc:
    that note and `tiro/filed-to`, other keys dropped and named. A single
    unknown word stays a typo, because it nearly always is. The verbs remain for
    what needs the user's signature or the runner's checks.
+19. **Chat reads freely and writes only through `tiro`.** The session has no
+   Write or Edit tool, Bash is guarded by a hook that refuses anything but one
+   `tiro` command, and every command but the read-only ones asks the user. It
+   loads the user's own Claude Code settings and nothing from this repo, the
+   vault or MCP. A request made in chat is written onto the note (`tiro ask`)
+   before it runs (`tiro once --note`), so the vault still shows what was
+   asked and the journal what was done.
 
 ## What the real vault taught
 

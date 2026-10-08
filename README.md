@@ -32,6 +32,11 @@ the folders you open up, works out what it is and what it relates to, and files
 it when that is obvious. Where it is unsure, it proposes or asks in the note.
 Everything it did unasked is listed at the top of the day's journal.
 
+Or ask. `tiro chat` opens a conversation with Tiro over the vault: "what did
+you do last night?", "what is waiting on me?", "research this note now". It
+reads freely and acts only through `tiro` commands you approve, so a request
+made in chat still lands on the note, where Obsidian shows it.
+
 ## structure
 
 tiro
