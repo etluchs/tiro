@@ -665,9 +665,14 @@ it is the one to get right.
 
 **CLI.** `tiro once` · `tiro watch` · `tiro lint` · `tiro status` ·
 `tiro accept <proposal>` · `tiro undo <run-id>` · `tiro strip <note>` ·
-`tiro chat`. The last drops into an interactive Claude Code session with the
-vault mounted and the constitution loaded — for the conversations that are
-genuinely conversations.
+`tiro chat` · `tiro ask`. Chat drops into an interactive Claude Code session
+with the vault added and the constitution loaded — for the conversations that
+are genuinely conversations, and the quick things a note is slow at. It has no
+tool that writes a file; Bash is guarded to run one `tiro` command and nothing
+else, and every command that changes anything asks the user first. To have
+Tiro act now, chat puts the request on the note (`tiro ask <note> <request>`,
+the `tiro:` key, as the user would) and runs that note alone (`tiro once
+--note <note>`), so the vault remains the record of what was asked.
 
 **Obsidian.** The [`claude-code-ide`](https://community.obsidian.md/plugins/claude-code-ide)
 plugin is optional and only improves `tiro chat`: it gives Claude Code the

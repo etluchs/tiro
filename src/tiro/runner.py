@@ -732,7 +732,14 @@ def once(
     ops: VaultOps,
     git: Git | None = None,
     now: float | None = None,
+    only: set[str] | None = None,
 ) -> journal.RunRecord:
+    """One pass over the vault.
+
+    ``only`` is a run the user asked for by name, from the command line or
+    chat: just those notes' requests, no auto mode, and none of the weekly or
+    housekeeping work, which belongs to the timer's runs.
+    """
     git = git or Git(config.vault)
     run_id = journal.new_run_id()
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -750,12 +757,13 @@ def once(
         for rel in reset_crashed_notes(config, git):
             record.note_line(f"reset `{rel}` from `working` to `queued` after a crashed run")
 
-        jobs, skipped = scan(config, now=now)
+        jobs, skipped = scan(config, now=now, only=only)
         state = _load_state(config)
 
         # Auto mode's notes after the ones the user asked for, and within what
         # the run has left. A note the user tagged is never among them.
-        auto_jobs, auto_skipped = auto.scan(config, state, now=now)
+        auto_jobs, auto_skipped = ([], []) if only is not None else auto.scan(
+            config, state, now=now)
         room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
         jobs = jobs[: config.run.max_jobs] + auto_jobs[:room]
         skipped += auto_skipped
@@ -827,7 +835,7 @@ def once(
         # Weekly, and after the jobs so this run's own corrections are in the
         # log. No model time: it is counting.
         today = run_id[:10]
-        if reflect.due(config, state, today):
+        if only is None and reflect.due(config, state, today):
             report = reflect.reflect(config, today=today)
             reflect.mark_done(state, today)
             _save_state(config, state)
@@ -841,7 +849,9 @@ def once(
         # this run. No model time: it is a directory listing. One commit per
         # index, so each can be reverted alone.
         said = state.setdefault("index", {}).setdefault("said", {})
-        for o in folder_index.run(config, state, today=today, now=now):
+        indexes = [] if only is not None else folder_index.run(
+            config, state, today=today, now=now)
+        for o in indexes:
             if o.what in ("created", "updated"):
                 git.commit([o.note], f"tiro(index): {o.folder}/",
                            {"Tiro-Run": run_id, "Tiro-Job": "index", "Tiro-Note": o.note})

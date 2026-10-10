@@ -72,18 +72,24 @@ def iter_notes(vault: Path):
         yield path
 
 
-def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[Skipped]]:
+def scan(config: Config, *, now: float | None = None,
+         only: set[str] | None = None) -> tuple[list[Job], list[Skipped]]:
     """Every note asking for work, and why the near-misses were passed over.
 
     Skips are returned rather than swallowed: a note that was ignored because
     the user had it open two seconds ago is a thing the journal should be able
     to say out loud.
+
+    ``only`` restricts the scan to those vault-relative paths, and drops the
+    "user may be typing" wait for them.
     """
     now = time.time() if now is None else now
     jobs: list[Job] = []
     skipped: list[Skipped] = []
     for path in iter_notes(config.vault):
         rel = path.relative_to(config.vault).as_posix()
+        if only is not None and rel not in only:
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -104,7 +110,10 @@ def scan(config: Config, *, now: float | None = None) -> tuple[list[Job], list[S
         if not wanted:
             continue
         age = now - path.stat().st_mtime
-        if age < config.run.skip_recent_seconds:
+        # Named notes are the user asking for this one, now (`tiro once
+        # --note`, from chat): they are at the terminal, not typing in it. The
+        # runner's own mtime check still catches an edit made during the job.
+        if only is None and age < config.run.skip_recent_seconds:
             skipped.append(Skipped(rel, f"modified {age:.0f}s ago; user may be typing"))
             continue
         if "tiro/hash" not in protocol.read_keys(text):
