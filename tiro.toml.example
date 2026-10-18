@@ -57,6 +57,12 @@ settle_minutes = 30
 # At most this many auto jobs per run, after the notes you tagged.
 max_per_run = 5
 
+[tasks]
+# Moving open tasks to the note they belong in, once you tick the move
+# (docs/TASK-MOVES.md). Folders no task is ever moved into, whatever their
+# trust level. Daily notes and Tiro/ are closed without being listed.
+# never_into = ["Roam/"]
+
 [index]
 # Folders that get a Map of Content, rebuilt when their contents change.
 # Created only where the folder is L3 in trust.toml; kept up to date wherever

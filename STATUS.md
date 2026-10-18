@@ -2,8 +2,9 @@
 
 Built in one unattended session, against the plan in
 [docs/ITERATION-1.md](docs/ITERATION-1.md), then revised against the real
-vault, then iterations 2 and 3 and free-form orders built on top. **307 tests, all passing** on Python 3.11+ with no dependencies beyond
-PyYAML and pytest.
+vault, then iterations 2 and 3, free-form orders and task moves built on top.
+**398 tests, all passing** on Python 3.11+ with no dependencies beyond PyYAML
+and pytest.
 
 ## What works, and is tested
 
@@ -23,6 +24,7 @@ PyYAML and pytest.
 | **dispatch** | payload validation, preview mode, idempotency by frontmatter then JQL label, and the crash window tested by killing the process between create and write-back |
 | **adopt** | read-only survey of a real vault: folders, daily-note home, inbox, archives, keys, tags, plugins, leftovers. Drafts `rules.md`, `trust.toml`, the `[lint]` section and `.gitignore` lines into `.tiro/proposals/adopt/` |
 | **auto mode** | `tiro auto on`: untagged notes in the root and L4 folders are triaged once they settle, and filed when the runner can check the basis. Daily notes once, the morning after. *Done unasked* heads the journal. Never run against the real vault yet |
+| **Task moves** | triage proposes a home for each open task, a checkbox per move in a `tasks` block; a tick is the accept, and the runner moves the task verbatim, with no model, into the destination's first task list. Stale proposals are refused and re-proposed; a check line by line confirms nothing else changed; one commit per batch. 26 tests in `tests/test_tasks.py`, against the spec's twelve criteria. Never run against the real vault yet |
 | **The CLI** | `status`, `once` (`--note` for one note, now), `ask`, `chat`, `lint`, `doctor`, `adopt`, `auto`, `reflect`, `accept`, `reject`, `index`, `undo`, `strip` |
 | **chat** | Claude Code over the vault with the constitution loaded and no tool that writes a file. Bash runs `tiro` and nothing else, enforced by a hook; read-only commands run without asking, the rest are put to the user. Requests go on the note with `tiro ask`, and run with `tiro once --note` |
 
@@ -199,6 +201,16 @@ These were made while building and are not in the design doc:
    vault or MCP. A request made in chat is written onto the note (`tiro ask`)
    before it runs (`tiro once --note`), so the vault still shows what was
    asked and the journal what was done.
+
+20. **A task move is the runner's, and checked line by line.** Moving a task
+   means deleting a line from one note and adding it to another, which never
+   #3 and "one job, one note" both forbade. Both now carry one exception, in
+   `CLAUDE.md`: a move the user ticked is carried out by the runner, not the
+   agent. It moves whole task lines verbatim, in one commit for both notes,
+   and `tasks.check` then confirms that the source lost exactly those lines
+   and the destination gained exactly those lines. The destination gets
+   nothing else, not even a key. Tiro remembers its own landings so that they
+   neither look like the user's edits nor make a later proposal stale.
 
 ## What the real vault taught
 

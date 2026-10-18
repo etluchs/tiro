@@ -206,6 +206,18 @@ class AutoConfig:
 
 
 @dataclass(frozen=True)
+class TasksConfig:
+    """Moving open tasks to where they belong (docs/TASK-MOVES.md).
+
+    ``never_into`` names folders no task is ever moved into, whatever their
+    trust level: an archive, an import. Daily notes and ``Tiro/`` are closed
+    to moved tasks without being listed.
+    """
+
+    never_into: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Config:
     root: Path
     """The tiro repo."""
@@ -217,6 +229,7 @@ class Config:
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
     index: IndexConfig = field(default_factory=IndexConfig)
     auto: AutoConfig = field(default_factory=AutoConfig)
+    tasks: TasksConfig = field(default_factory=TasksConfig)
     jobs: dict[str, dict] = field(default_factory=dict)
     trust: TrustMap = field(default_factory=TrustMap)
 
@@ -276,6 +289,7 @@ class Config:
             index=IndexConfig(**{**raw.get("index", {}),
                                  "folders": tuple(raw.get("index", {}).get("folders", ()))}),
             auto=_auto(raw.get("auto", {})),
+            tasks=TasksConfig(never_into=tuple(raw.get("tasks", {}).get("never_into", ()))),
             jobs=raw.get("jobs", {}),
             trust=trust,
         )

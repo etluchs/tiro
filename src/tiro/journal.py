@@ -25,6 +25,8 @@ class Entry:
     usage: Usage = field(default_factory=Usage)
     trigger: str = "request"  # request | auto
     moved_to: str = ""
+    #: accepted task moves: (the task's words, from, to), one per task.
+    moves: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -95,6 +97,8 @@ def write_journal(config: Config, record: RunRecord) -> Path:
     for entry in record.entries:
         if entry.trigger != "auto":
             lines.append(_entry_line(entry, link=entry.note))
+            for words, src, dst in entry.moves:
+                lines.append(f"    - {words}: [[{_link(src)}]] → [[{_link(dst)}]]")
     for skip in record.skipped:
         lines.append(f"- · skipped [[{_link(skip['rel'])}]] — {skip['why']}")
     for note in record.notes:

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tiro import auto, connect, corrections, gate, journal, protocol, reflect
+from tiro import auto, connect, corrections, gate, journal, protocol, reflect, tasks
 from tiro import index as folder_index
 from tiro.agent import AgentError, AgentRunner, JobOutput, JobRequest, Usage
 from tiro.config import Config, as_vault_path
@@ -42,6 +42,8 @@ class Outcome:
     moved_to: str = ""
     #: blocked by the machine, not the material: the note runs again by itself.
     retry: bool = False
+    #: accepted task moves carried out: (the task's words, from, to).
+    moves: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -222,6 +224,17 @@ def apply_output(
         text = protocol.upsert_block(text, job=job.verb, id=bid, body=output.block)
         if wrote_block is not None:
             wrote_block.append(bid)
+    if job.verb == "triage" and output.status != "blocked":
+        # Where each open task belongs, as a block of its own so that a later
+        # triage does not overwrite the record of what moved. The runner
+        # checks every destination and writes every line; triage only names.
+        board = tasks.propose(config, job.rel, text, output.tasks,
+                              today=run_id[:10], index=Index(config.vault))
+        if board:
+            tid = protocol.block_id(text, note_id, tasks.JOB)
+            text = protocol.upsert_block(text, job=tasks.JOB, id=tid, body=board)
+            if wrote_block is not None:
+                wrote_block.append(tid)
     for key, value in output.keys.items():
         text = protocol.set_key(text, key, value)
     text = protocol.set_key(text, "tiro/status", output.status)
@@ -571,6 +584,196 @@ def _execute(
                    moved_to=moved[1] if moved else "")
 
 
+def move_tasks(
+    config: Config,
+    git: Git,
+    ops: VaultOps,
+    rel: str,
+    *,
+    run_id: str,
+    state: dict,
+) -> Outcome:
+    """Carry out the task moves the user ticked on ``rel`` (docs/TASK-MOVES.md).
+
+    No model: a tick is an instruction the runner can carry out and check by
+    itself. Every ticked move is either made or unticked with the reason on
+    the note, never left ticked and silent: a tick left standing would fire
+    again every run. The whole batch is one commit, so reverting it puts back
+    the note the tasks left and every note they joined, together.
+    """
+    undo = Undo(config.vault)
+    try:
+        return _move_tasks(config, git, ops, rel, run_id=run_id, state=state, undo=undo)
+    except _NoteMovedUnderUs as exc:
+        undo.undo()
+        return Outcome("skipped", f"`{exc.args[0]}` was edited while Tiro moved "
+                                  "tasks; it tries again next run")
+    except Exception as exc:  # noqa: BLE001 - the last line of never #4
+        undo.undo()
+        detail = f"unexpected failure: {type(exc).__name__}: {exc}"
+        _untick(config, git, rel, run_id, f"Not moved: {detail}.")
+        return Outcome("blocked", detail)
+
+
+def _move_tasks(
+    config: Config,
+    git: Git,
+    ops: VaultOps,
+    rel: str,
+    *,
+    run_id: str,
+    state: dict,
+    undo: Undo,
+) -> Outcome:
+    note = config.vault / rel
+    today = run_id[:10]
+    _keep_path(git, rel, run_id)
+    text = note.read_text(encoding="utf-8")
+    baseline = note.stat().st_mtime
+    if not tasks.source_permits(config, rel, text):
+        return Outcome("skipped", f"a task may leave `{rel}` only where Tiro may "
+                                  f"write, and it is {config.trust.level_for(rel)}")
+    block = tasks.block_of(text)
+    board = tasks.read_board(text)
+    index = Index(config.vault)
+    pool = [t for t in tasks.tasks(text) if t.open and not t.problem]
+    go: list[tuple[tasks.Move, tasks.Task]] = []
+    waiting: list[str] = []
+    again = 0
+    for move in [m for m in board.moves if m.ticked]:
+        move.note = ""
+        # The link on the line is the user's to edit; the path Tiro proposed
+        # is not. Naming another note is a new proposal, checked and hashed
+        # like any other, and it waits for a tick of its own.
+        named = tasks.resolve(config, index, move.named) if move.named else move.to
+        if named != move.to:
+            move.ticked = False
+            problem = tasks.destination_problem(config, rel, named)
+            if problem:
+                move.note = f"Not moved: you named `{named}`, and {problem}."
+            else:
+                move.to = named
+                move.hash = protocol.user_hash((config.vault / named).read_text(encoding="utf-8"))
+                move.note = "Proposed again for the note you named. Tick again to move it there."
+                again += 1
+            continue
+        problem = tasks.destination_problem(config, rel, move.to)
+        if problem:
+            move.ticked = False
+            move.note = f"Not moved: {problem}."
+            continue
+        task = next((t for t in pool if t.key == move.task), None)
+        if task is None:
+            board.moves.remove(move)
+            board.dropped.append(f"{move.text} — not moved: it is no longer in this "
+                                 "note as it was proposed (done, edited or moved since)")
+            continue
+        dest = config.vault / move.to
+        current = protocol.user_hash(dest.read_text(encoding="utf-8"))
+        if not tasks.only_landed(state, move.to, move.hash, current):
+            # Criterion 9: the place the task was going to has changed under
+            # the proposal. Proposed again against the note as it is now.
+            move.ticked = False
+            move.hash = current
+            move.note = ("Not moved: that note has changed since this was proposed. "
+                         "Tick again if the task still belongs there.")
+            again += 1
+            continue
+        if (time.time() - dest.stat().st_mtime < config.run.skip_recent_seconds
+                and not tasks.tiro_left(state, move.to, current)):
+            waiting.append(move.to)  # still ticked: the next run makes it
+            continue
+        pool.remove(task)
+        go.append((move, task))
+
+    go.sort(key=lambda pair: pair[1].start)
+    into: dict[str, list[list[str]]] = {}
+    for move, task in go:
+        into.setdefault(move.to, []).append(list(task.lines))
+        board.moves.remove(move)
+        board.moved.append(f"{today}: {move.text} → {tasks.link(index, move.to)}")
+    body = tasks.render(board, index, today)
+    if not go and body.strip() == block.body.strip():
+        if not waiting:
+            return Outcome("skipped", "no move is ticked any more")
+        return Outcome("skipped", "waiting: " + ", ".join(f"`{w}`" for w in waiting)
+                       + " was edited a moment ago; the move is made next run")
+
+    for dest in into:
+        _keep_path(git, dest, run_id)
+    before = gate.snapshot(config, git, ops, rel)
+    after = tasks.remove(text, [task for _, task in go])
+    after = protocol.upsert_block(after, job=tasks.JOB, id=block.id, body=body)
+    after = protocol.set_key(after, "tiro/run", run_id)
+    if protocol.read_keys(text).get("tiro/hash") == protocol.user_hash(text):
+        # The note was as Tiro last saw it, so the tasks leaving is Tiro's
+        # change and must not look like the user's.
+        after = protocol.set_key(after, "tiro/hash", protocol.user_hash(after))
+    dest_before = {d: (config.vault / d).read_text(encoding="utf-8") for d in into}
+    dest_mtime = {d: (config.vault / d).stat().st_mtime for d in into}
+    dest_after: dict[str, str] = {}
+    for dest, chunks in into.items():
+        landed = dest_before[dest]
+        for chunk in chunks:
+            landed = tasks.insert(landed, chunk)
+        dest_after[dest] = landed
+
+    if note.stat().st_mtime != baseline:
+        raise _NoteMovedUnderUs(rel)
+    undo.write(rel, after)
+    for dest, landed in dest_after.items():
+        if (config.vault / dest).stat().st_mtime != dest_mtime[dest]:
+            raise _NoteMovedUnderUs(dest)
+        undo.write(dest, landed)
+
+    declared = [rel, *into]
+    result = gate.check(config, git, ops, verb=tasks.JOB, note_rel=rel,
+                        declared=declared, before=before, landed=set(into))
+    for failure in tasks.check(text, after, [c for cs in into.values() for c in cs],
+                               dest_before, dest_after, into):
+        result.fail(failure)
+    if not result.ok:
+        left = undo.undo()
+        untouched = sorted(set(left) | {p for p in result.changed if p not in declared})
+        why = "; ".join(result.failures)
+        if untouched:
+            why += "; left as found: " + ", ".join(untouched)
+        _untick(config, git, rel, run_id, f"Not moved: {why}.")
+        return Outcome("blocked", "gate: " + why)
+
+    said = []
+    if go:
+        said.append(f"moved {tasks._count(len(go))}")
+    if again:
+        said.append(f"{again} proposed again")
+    if waiting:
+        said.append(f"{len(waiting)} waiting on a note edited a moment ago")
+    summary = "; ".join(said) or "updated the task proposals"
+    sha = git.commit(declared, f"tiro(tasks): {Path(rel).stem}\n\n{summary}",
+                     {"Tiro-Run": run_id, "Tiro-Job": tasks.JOB, "Tiro-Note": rel})
+    for dest in into:
+        tasks.remember_landing(state, dest, protocol.user_hash(dest_before[dest]),
+                               protocol.user_hash(dest_after[dest]))
+    return Outcome("done" if go else "needs-input", summary, sha or "",
+                   wrote_block=[block.id],
+                   moves=[(move.text, rel, move.to) for move, _ in go])
+
+
+def _untick(config: Config, git: Git, rel: str, run_id: str, why: str) -> None:
+    """Untick every ticked move on the note and say why under each. A move that
+    could not be made must not stay ticked: it would be tried every run, and
+    the note would not say what went wrong."""
+    note = config.vault / rel
+    if not note.exists():
+        return
+    text = tasks.untick(note.read_text(encoding="utf-8"), why, Index(config.vault), run_id[:10])
+    if text is None:
+        return
+    _atomic_write(note, protocol.set_key(text, "tiro/run", run_id))
+    git.commit([rel], f"tiro: block {rel}",
+               {"Tiro-Run": run_id, "Tiro-Job": tasks.JOB, "Tiro-Note": rel})
+
+
 def _keep(git: Git, job: Job, run_id: str) -> None:
     """Commit the note as the user left it, before Tiro touches it.
 
@@ -581,12 +784,16 @@ def _keep(git: Git, job: Job, run_id: str) -> None:
     mode makes that the common case: a fresh capture is always uncommitted.
     The commit carries no ``Tiro-Run`` trailer, so undoing the run leaves it.
     """
-    if not (git.repo / job.rel).exists():
+    _keep_path(git, job.rel, run_id)
+
+
+def _keep_path(git: Git, rel: str, run_id: str) -> None:
+    if not (git.repo / rel).exists():
         return
-    if not git("status", "--porcelain", "--", job.rel).strip():
+    if not git("status", "--porcelain", "--", rel).strip():
         return
-    git.commit([job.rel], f"tiro: keep {job.rel} as you left it",
-               {"Tiro-Keep": run_id, "Tiro-Note": job.rel})
+    git.commit([rel], f"tiro: keep {rel} as you left it",
+               {"Tiro-Keep": run_id, "Tiro-Note": rel})
 
 
 def _commit_block(git: Git, job: Job, run_id: str) -> None:
@@ -670,6 +877,7 @@ def _render_skill(config: Config, job: Job, text: str) -> str:
         + f"Note: `{job.rel}`\nVault root: `{config.vault}`\n"
         + rules_line
         + (_auto_line(job) if job.trigger == "auto" else "")
+        + (_tasks_section(text) if job.verb == "triage" else "")
         + asked
         + "\nThe note as it stands:\n\n<note>\n"
         + text
@@ -677,13 +885,29 @@ def _render_skill(config: Config, job: Job, text: str) -> str:
     )
 
 
+def _tasks_section(text: str) -> str:
+    """The open tasks triage is to place, numbered by the runner, which is how
+    its answer refers to them. Tasks the runner will not move are left out:
+    the block says why for those without asking the model."""
+    movable = [t for t in tasks.tasks(text) if t.open and not t.problem]
+    if not movable:
+        return ""
+    rows = []
+    for n, task in enumerate(movable, start=1):
+        under = len(task.lines) - 1
+        rows.append(f"{n}. {task.lines[0]}" + (f"   (+{under} line(s) under it)" if under else ""))
+    return ("\n## Open tasks\n\nThe runner found these open tasks in the note. "
+            "Place each one, by its number, in `tasks` (see the skill):\n\n```text\n"
+            + "\n".join(rows) + "\n```\n")
+
+
 def _auto_line(job: Job) -> str:
     if is_daily(job.rel):
         return ("\nNobody asked for this job: it is auto mode, looking at "
                 "yesterday's daily note. A daily note never moves, so propose no "
-                "destination and leave `obvious` false. Related notes, and a "
-                "suggested next verb for anything in it that wants one, are "
-                "what is useful here.\n")
+                "destination and leave `obvious` false. Related notes, a "
+                "suggested next verb for anything in it that wants one, and "
+                "where its open tasks belong are what is useful here.\n")
     return ("\nNobody asked for this job: it is auto mode, looking at a note the "
             "user wrote without tagging it. Work it out as for any triage. Say "
             "`obvious` only when the destination is clearly right, and give the "
@@ -757,17 +981,7 @@ def once(
         for rel in reset_crashed_notes(config, git):
             record.note_line(f"reset `{rel}` from `working` to `queued` after a crashed run")
 
-        jobs, skipped = scan(config, now=now, only=only)
         state = _load_state(config)
-
-        # Auto mode's notes after the ones the user asked for, and within what
-        # the run has left. A note the user tagged is never among them.
-        auto_jobs, auto_skipped = ([], []) if only is not None else auto.scan(
-            config, state, now=now)
-        room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
-        jobs = jobs[: config.run.max_jobs] + auto_jobs[:room]
-        skipped += auto_skipped
-        record.skipped = [{"rel": s.rel, "why": s.why} for s in skipped]
 
         # Before any job runs, so what is observed is the user's doing and not
         # this run's. Costs no model time: it is a diff between what Tiro
@@ -778,6 +992,31 @@ def once(
                 + (f" — {correction.was} → {correction.now}"
                    if correction.kind != "rejected-block" else " — the block was deleted")
             )
+
+        # Task moves the user ticked, before the scan, so that a note a task
+        # left or joined is judged as it now stands. No model time: the runner
+        # makes each move and checks it.
+        ticked, ticked_skipped = tasks.accepted(
+            config, now=time.time() if now is None else now, only=only)
+        for rel in ticked:
+            outcome = move_tasks(config, git, ops, rel, run_id=run_id, state=state)
+            record.add(journal.Entry(tasks.JOB, rel, outcome.outcome, outcome.detail,
+                                     outcome.commit, moves=outcome.moves))
+            for block_id in outcome.wrote_block:
+                corrections.remember_block(state, block_id, run_id)
+            _save_state(config, state)
+
+        jobs, skipped = scan(config, now=now, only=only, state=state)
+        skipped += ticked_skipped
+
+        # Auto mode's notes after the ones the user asked for, and within what
+        # the run has left. A note the user tagged is never among them.
+        auto_jobs, auto_skipped = ([], []) if only is not None else auto.scan(
+            config, state, now=now)
+        room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
+        jobs = jobs[: config.run.max_jobs] + auto_jobs[:room]
+        skipped += auto_skipped
+        record.skipped = [{"rel": s.rel, "why": s.why} for s in skipped]
         day = run_id[:10]
         deadline = time.monotonic() + config.run.max_seconds
 

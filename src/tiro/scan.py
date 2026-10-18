@@ -73,7 +73,8 @@ def iter_notes(vault: Path):
 
 
 def scan(config: Config, *, now: float | None = None,
-         only: set[str] | None = None) -> tuple[list[Job], list[Skipped]]:
+         only: set[str] | None = None,
+         state: dict | None = None) -> tuple[list[Job], list[Skipped]]:
     """Every note asking for work, and why the near-misses were passed over.
 
     Skips are returned rather than swallowed: a note that was ignored because
@@ -82,7 +83,12 @@ def scan(config: Config, *, now: float | None = None,
 
     ``only`` restricts the scan to those vault-relative paths, and drops the
     "user may be typing" wait for them.
+
+    ``state``, when given, is how a note that changed only by a task Tiro
+    moved into it is told from one the user edited (``tasks.seen_but_landed``).
     """
+    from tiro.tasks import seen_but_landed
+
     now = time.time() if now is None else now
     jobs: list[Job] = []
     skipped: list[Skipped] = []
@@ -96,6 +102,10 @@ def scan(config: Config, *, now: float | None = None,
             skipped.append(Skipped(rel, f"unreadable: {exc}"))
             continue
         wanted = protocol.pending(text)
+        landed = bool(wanted) and state is not None and seen_but_landed(state, rel, text)
+        if landed:
+            done = protocol.done_verbs(text)
+            wanted = [v for v in protocol.verbs(text) if v not in done]
         if protocol.verb(text) is None or not protocol.verbs(text):
             continue
         if config.trust.level_for(rel) == "L0":
@@ -118,7 +128,7 @@ def scan(config: Config, *, now: float | None = None,
             continue
         if "tiro/hash" not in protocol.read_keys(text):
             reason = "new request"
-        elif protocol.unseen(text):
+        elif protocol.unseen(text) and not landed:
             reason = "user content changed since the last run"
         else:
             reason = "asked for and not yet done"

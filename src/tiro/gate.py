@@ -29,6 +29,9 @@ REQUIRED_TRUST = {
     "dispatch": "L2",
     "connect": "L2",
     "order": "L2",
+    # Accepted task moves: the runner's, never a verb. The note the tasks
+    # leave is judged at this; the notes they join at ``MOVE_TO_TRUST``.
+    "tasks": "L2",
 }
 MAY_MOVE = {"file"}
 
@@ -164,6 +167,7 @@ def check(
     rewritten: set[str] | None = None,
     trigger: str = "request",
     new_folder: bool = False,
+    landed: set[str] | None = None,
 ) -> GateResult:
     """Validate everything the job touched. Every failure is collected, not just
     the first: a job that broke three rules should say so once."""
@@ -178,6 +182,9 @@ def check(
     # writes would make filing any linked note out of an L1 folder impossible,
     # which is most notes worth filing.
     relinked = {as_vault_path(p) for p in (rewritten or set())}
+    # Notes an accepted task moved into. Adding to a note the user did not
+    # tag is putting something somewhere, so it is judged as filing is.
+    landed = {as_vault_path(p) for p in (landed or set())}
 
     auto = trigger == "auto"
     if moved and verb not in MAY_MOVE and not (auto and verb == "triage"):
@@ -217,6 +224,13 @@ def check(
             result.fail(f"changed an undeclared path: {path}")
         if path in (move_src, move_dst) or path in relinked:
             continue  # judged by the move rules above, not by the write rule
+        if path in landed:
+            if not config.trust.permits(path, MOVE_TO_TRUST):
+                result.fail(
+                    f"moved a task into {path}, which is "
+                    f"{config.trust.level_for(path)}; that needs {MOVE_TO_TRUST}"
+                )
+            continue
         # The tagged note itself is judged with its tag counted as consent;
         # any other path the job touched is judged by its folder alone.
         allowed = (note_permits(config, path, required) if path == note_rel and not auto

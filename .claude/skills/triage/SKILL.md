@@ -42,6 +42,24 @@ is what you are here for. Do not treat it as a reason to stop.
    spec (`spec`). Name the verb in one line, e.g. "Reads like a question to
    look up: add `tiro: research`." You do not start it. Most notes need none.
 
+## Open tasks
+
+When the note has open tasks (`- [ ]`), the job lists them for you, numbered.
+Tasks get written down wherever the user happens to be, usually the day's
+daily note; your job is to say where each one belongs, so that each context's
+backlog is complete.
+
+For each, either name the **existing note** it belongs in, or say it stays and
+why. Look at where tasks like it already live: a note with a task list for that
+project, that person, that context. Follow `.tiro/rules.md` (folders are
+contexts; daily notes and archives are never destinations). A task stays when
+nothing fits, when it is about the day itself, or when you cannot tell. Never
+propose a new note to hold one task; if one would help, say so in `why`.
+
+You only name. The runner checks each destination, writes the proposals as a
+checkbox per move, and moves nothing until the user ticks one. It moves the
+task exactly as written, so do not suggest rewording.
+
 ## Obvious, and why
 
 Say `"obvious": true` only when the destination is clearly right: a rule in
@@ -92,6 +110,10 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
   "keys": {"tiro/filed-to": "Areas/…/name.md"},
   "obvious": false,
   "basis": {"rule": "R-014"},
+  "tasks": [
+    {"n": 1, "to": "Projects/JupyterHub next.md", "why": "the hub upgrade backlog"},
+    {"n": 2, "to": "", "why": "a personal errand; no note holds those"}
+  ],
   "detail": "one line for the journal, under 120 characters"
 }
 ```
@@ -100,6 +122,9 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
 - `keys` may only contain keys starting with `tiro/`. Anything else is rejected.
 - `obvious` and `basis` are optional; leave `obvious` false unless the section
   above applies.
+- `tasks` has one entry per open task the job listed, by its number. `to` is
+  a vault-relative path to an existing note, or empty for a task that stays.
+  `why` is a few words. Leave `tasks` out when the job lists none.
 - `needs-input` means you asked a question and are waiting. Prefer it to guessing.
 - `blocked` means you could not do the job. Say why in `detail`.
 

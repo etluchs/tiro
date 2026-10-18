@@ -29,7 +29,7 @@ import time
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 
-from tiro import corrections, gate, protocol
+from tiro import corrections, gate, protocol, tasks
 from tiro.config import ROOT, Config, as_vault_path, in_folder
 from tiro.scan import DAILY, Job, Skipped, is_daily, iter_notes
 
@@ -141,8 +141,8 @@ def scan(config: Config, state: dict, *, now: float | None = None
             continue  # the explicit scan reports unreadable notes
         if protocol.verb(text) is not None:
             continue  # the user asked for something, or said hold: theirs
-        if not protocol.unseen(text):
-            continue
+        if not protocol.unseen(text) or tasks.seen_but_landed(state, rel, text):
+            continue  # seen, or changed only by a task Tiro moved in
         daily = _daily_date(rel)
         if daily is not None and daily >= today:
             continue  # still being written; looked at the morning after

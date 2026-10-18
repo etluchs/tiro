@@ -13,11 +13,13 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import time
 from pathlib import Path
 
-from tiro import auto, journal, lint, ops as ops_mod, protocol, runner, scan
+from tiro import auto, journal, lint, ops as ops_mod, protocol, runner, scan, tasks
 from tiro.config import TRUST_MEANING, Config, ConfigError
 from tiro.jira import Acli
+from tiro.links import Index
 from tiro.vcs import Git, LockBusy, run_lock
 
 
@@ -110,13 +112,18 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(f"              “{words[:70]}{'…' if len(words) > 70 else ''}”")
     for skip in skipped:
         print(f"    skip      {skip.rel}  ({skip.why})")
+    ticked, waiting = tasks.accepted(config, now=time.time())
+    for rel in ticked:
+        print(f"    tasks     {rel}  (ticked moves, made first)")
+    for skip in waiting:
+        print(f"    skip      {skip.rel}  ({skip.why})")
     return 0
 
 
 def _queue(config: Config, state: dict):
     """What the next run would take on: the user's requests, then auto mode's
     notes within what is left of the run, as ``runner.once`` counts them."""
-    jobs, skipped = scan.scan(config)
+    jobs, skipped = scan.scan(config, state=state)
     auto_jobs, auto_skipped = auto.scan(config, state)
     room = max(0, min(config.auto.max_per_run, config.run.max_jobs - len(jobs)))
     return jobs[: config.run.max_jobs] + auto_jobs[:room], skipped + auto_skipped
@@ -390,7 +397,23 @@ def cmd_undo(args: argparse.Namespace) -> int:
     # next run would take for a new note and file all over again.
     unasked = [_trailer(git, sha, "Tiro-Note") for sha in shas
                if _trailer(git, sha, "Tiro-Trigger") == "auto"]
+    # And which notes had ticked task moves carried out. The revert puts the
+    # ticks back with the tasks, and a tick is the trigger: left alone, the
+    # next run would make the very moves just undone.
+    moved = {_trailer(git, sha, "Tiro-Note") for sha in shas
+             if _trailer(git, sha, "Tiro-Job") == tasks.JOB}
     git.revert(shas)
+    for rel in sorted(filter(None, moved)):
+        path = config.vault / rel
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        unticked = text and tasks.untick(
+            text, f"Undone with `tiro undo {args.run_id}`. Tick again to move it.",
+            Index(config.vault), _today())
+        if unticked:
+            path.write_text(unticked, encoding="utf-8")
+            git.commit([rel], f"tiro: untick the moves undone on {rel}",
+                       {"Tiro-Undo": args.run_id, "Tiro-Note": rel})
+            print(f"unticked the moves on {rel}; tick them again to have them made")
     if unasked:
         state = runner._load_state(config)
         for rel in filter(None, unasked):

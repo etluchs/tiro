@@ -136,6 +136,10 @@ class JobOutput:
     #: the reason for itself (``auto.move_problem``); on its own it moves nothing.
     obvious: bool = False
     basis: dict = field(default_factory=dict)
+    #: triage only: where each open task belongs, by the number the runner
+    #: gave it: ``{"n": 1, "to": "path.md", "why": "…"}``. The runner checks
+    #: every destination and writes the block itself (``tasks.propose``).
+    tasks: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, data: dict) -> "JobOutput":
@@ -160,6 +164,8 @@ class JobOutput:
             detail=str(data.get("detail", ""))[:200],
             obvious=data.get("obvious") is True,
             basis=data.get("basis") if isinstance(data.get("basis"), dict) else {},
+            tasks=[t for t in data.get("tasks") or [] if isinstance(t, dict)]
+            if isinstance(data.get("tasks"), list) else [],
         )
 
 
