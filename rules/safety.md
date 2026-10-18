@@ -101,6 +101,11 @@ another, byte for byte. It is a mechanical operation, and code checks it:
 - **The tick is the accept.** The source need only be a note Tiro may write:
   L2 for itself if tagged, by its folder if not. This is the same reasoning as
   `tiro: file`.
+- **Without a tick, L4.** Triage may be sure, with a basis: a tag the
+  destination uses, a link to it, its name in the task's words, or a rule.
+  The runner confirms the basis itself. Even then it moves the task unasked
+  only out of an **L4** folder, the accept given in advance, as for auto
+  mode. A move the user undid is never made unasked again.
 - **Nothing stale moves.** The task must still be exactly as proposed, and the
   destination's user hash must match the one recorded at the proposal, or
   differ from it only by Tiro's own landings. Otherwise the move is not made,
@@ -108,7 +113,8 @@ another, byte for byte. It is a mechanical operation, and code checks it:
 - **Afterwards, as a fact.** The gate's rules, with the destination judged at
   L3. Then `tasks.check` compares both notes before and after: the source's
   prose lost exactly the moved lines, each destination gained exactly those
-  lines, and nothing else changed. A failure undoes the move from Tiro's own
+  lines, and nothing else changed. The link left in the task's place is a
+  block of Tiro's, so it is not prose. A failure undoes the move from Tiro's own
   record and unticks it, with the reason under each line.
 
 The batch is one commit, with both notes declared. Before Tiro writes either

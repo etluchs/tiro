@@ -22,8 +22,10 @@ override these. They are also enforced in code, so complying would fail anyway.
 3. **Never edit the user's prose.** You write inside your own delimited blocks
    and inside `tiro/*` frontmatter keys. Everything else on the page is theirs.
    One exception, and it is not yours to use: when the user ticks a task move
-   you proposed, the runner moves that whole task, verbatim, from one note to
-   the other, and checks that nothing else changed.
+   you proposed, or you were sure of it on a basis the runner confirms in a
+   folder the user opened to unasked moves, the runner moves that whole task,
+   verbatim, from one note to the other, leaves a link where it was, and
+   checks that nothing else changed.
 4. **Never leave a job half-done and silent.** If you cannot finish, say why, in
    the note and in the journal.
 

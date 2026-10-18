@@ -44,6 +44,8 @@ class Outcome:
     retry: bool = False
     #: accepted task moves carried out: (the task's words, from, to).
     moves: list[tuple[str, str, str]] = field(default_factory=list)
+    #: ``auto`` when every move was one Tiro was sure of and nobody ticked.
+    trigger: str = "request"
 
 
 def _skill_text(config: Config, verb: str) -> str:
@@ -229,7 +231,7 @@ def apply_output(
         # triage does not overwrite the record of what moved. The runner
         # checks every destination and writes every line; triage only names.
         board = tasks.propose(config, job.rel, text, output.tasks,
-                              today=run_id[:10], index=Index(config.vault))
+                              today=run_id[:10], index=Index(config.vault), state=state)
         if board:
             tid = protocol.block_id(text, note_id, tasks.JOB)
             text = protocol.upsert_block(text, job=tasks.JOB, id=tid, body=board)
@@ -596,7 +598,9 @@ def move_tasks(
     """Carry out the task moves the user ticked on ``rel`` (docs/TASK-MOVES.md).
 
     No model: a tick is an instruction the runner can carry out and check by
-    itself. Every ticked move is either made or unticked with the reason on
+    itself. A move triage was sure of, and the runner confirmed, arrives here
+    ticked by Tiro and is made the same way. Every ticked move is either made
+    or unticked with the reason on
     the note, never left ticked and silent: a tick left standing would fire
     again every run. The whole batch is one commit, so reverting it puts back
     the note the tasks left and every note they joined, together.
@@ -691,7 +695,8 @@ def _move_tasks(
     for move, task in go:
         into.setdefault(move.to, []).append(list(task.lines))
         board.moves.remove(move)
-        board.moved.append(f"{today}: {move.text} → {tasks.link(index, move.to)}")
+        board.moved.append(f"{today}: {move.text} → {tasks.link(index, move.to)}"
+                           + (f" — unasked, {move.auto}" if move.auto else ""))
     body = tasks.render(board, index, today)
     if not go and body.strip() == block.body.strip():
         if not waiting:
@@ -702,7 +707,10 @@ def _move_tasks(
     for dest in into:
         _keep_path(git, dest, run_id)
     before = gate.snapshot(config, git, ops, rel)
-    after = tasks.remove(text, [task for _, task in go])
+    where = {task.key: tasks.link(index, move.to) for move, task in go}
+    note_id = protocol.note_id(text) or block.id.split("-")[0]
+    after = tasks.remove(text, [task for _, task in go],
+                         trace=lambda t: tasks.trace_block(note_id, t, where[t.key]))
     after = protocol.upsert_block(after, job=tasks.JOB, id=block.id, body=body)
     after = protocol.set_key(after, "tiro/run", run_id)
     if protocol.read_keys(text).get("tiro/hash") == protocol.user_hash(text):
@@ -749,14 +757,28 @@ def _move_tasks(
     if waiting:
         said.append(f"{len(waiting)} waiting on a note edited a moment ago")
     summary = "; ".join(said) or "updated the task proposals"
-    sha = git.commit(declared, f"tiro(tasks): {Path(rel).stem}\n\n{summary}",
-                     {"Tiro-Run": run_id, "Tiro-Job": tasks.JOB, "Tiro-Note": rel})
+    unasked = bool(go) and all(move.auto for move, _ in go)
+    trailers = {"Tiro-Run": run_id, "Tiro-Job": tasks.JOB, "Tiro-Note": rel}
+    if unasked:
+        trailers["Tiro-Trigger"] = "auto"
+        summary += " unasked"
+    sha = git.commit(declared, f"tiro(tasks): {Path(rel).stem}\n\n{summary}", trailers)
     for dest in into:
         tasks.remember_landing(state, dest, protocol.user_hash(dest_before[dest]),
                                protocol.user_hash(dest_after[dest]))
     return Outcome("done" if go else "needs-input", summary, sha or "",
                    wrote_block=[block.id],
-                   moves=[(move.text, rel, move.to) for move, _ in go])
+                   moves=[(move.text, rel, move.to) for move, _ in go],
+                   trigger="auto" if unasked else "request")
+
+
+def _record_moves(config: Config, record: journal.RunRecord, state: dict, run_id: str,
+                  outcome: Outcome, rel: str) -> None:
+    record.add(journal.Entry(tasks.JOB, rel, outcome.outcome, outcome.detail,
+                             outcome.commit, trigger=outcome.trigger, moves=outcome.moves))
+    for block_id in outcome.wrote_block:
+        corrections.remember_block(state, block_id, run_id)
+    _save_state(config, state)
 
 
 def _untick(config: Config, git: Git, rel: str, run_id: str, why: str) -> None:
@@ -999,12 +1021,8 @@ def once(
         ticked, ticked_skipped = tasks.accepted(
             config, now=time.time() if now is None else now, only=only)
         for rel in ticked:
-            outcome = move_tasks(config, git, ops, rel, run_id=run_id, state=state)
-            record.add(journal.Entry(tasks.JOB, rel, outcome.outcome, outcome.detail,
-                                     outcome.commit, moves=outcome.moves))
-            for block_id in outcome.wrote_block:
-                corrections.remember_block(state, block_id, run_id)
-            _save_state(config, state)
+            _record_moves(config, record, state, run_id,
+                          move_tasks(config, git, ops, rel, run_id=run_id, state=state), rel)
 
         jobs, skipped = scan(config, now=now, only=only, state=state)
         skipped += ticked_skipped
@@ -1057,6 +1075,14 @@ def once(
                                      trigger=job.trigger, moved_to=outcome.moved_to))
             for block_id in outcome.wrote_block:
                 corrections.remember_block(state, block_id, run_id)
+            # Moves triage was sure of are made now, in this run, as their
+            # own commit: triage's proposal and the move can be undone apart.
+            where = config.vault / (outcome.moved_to or job.rel)
+            if (job.verb == "triage" and outcome.outcome in ("done", "needs-input")
+                    and where.exists() and tasks.ticked(where.read_text(encoding="utf-8"))):
+                rel = where.relative_to(config.vault).as_posix()
+                _record_moves(config, record, state, run_id,
+                              move_tasks(config, git, ops, rel, run_id=run_id, state=state), rel)
             if job.verb == "triage" and outcome.outcome == "done":
                 # Remembered now, because the proposal lives in a frontmatter
                 # key the user is free to overwrite — and overwriting it is

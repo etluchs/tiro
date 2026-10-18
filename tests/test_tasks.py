@@ -429,3 +429,115 @@ def test_undo_takes_the_move_back_and_unticks_it(ready, vault) -> None:
     assert "- [x]" not in body and "Undone with `tiro undo" in body
     _age(vault)
     assert _carry(ready).entries == []  # the undone move is not made again
+
+
+# --- sure: moved right away, no tick -------------------------------------
+
+
+def _sure(basis: dict, n: int = 1, to: str = HUB) -> list[dict]:
+    return [{"n": n, "to": to, "why": "x", "sure": True, "basis": basis}]
+
+
+@pytest.fixture
+def open_root(ready):
+    """The root raised to L4: Tiro may move things out of it unasked."""
+    return replace(ready, trust=TrustMap(default="L1", folders={
+        "/": "L4", "Projects/": "L3", "Roam/": "L3"}))
+
+
+def _hub_uses_the_tag(vault: Path) -> None:
+    _write(vault, HUB, HUB_TEXT.replace("Upgrade to 5.x", "Upgrade to 5.x #jupyterhub"))
+    git = Git(vault)
+    git("commit", "-qam", "the hub uses the tag")
+    _age(vault)
+
+
+def test_a_sure_move_is_made_in_the_same_run_and_leaves_a_link(open_root, vault) -> None:
+    _hub_uses_the_tag(vault)
+    git = Git(vault)
+    record = _triage(open_root, _sure({"tag": "jupyterhub"}))
+
+    day = (vault / DAY).read_text()
+    first = tasks.tasks(DAILY)[0]
+    assert "\n".join(first.lines) in (vault / HUB).read_text()
+    assert "\n".join(first.lines) not in day
+    # Where the task was, a link to where it went: Tiro's block, not a task.
+    trace = re.search(r"# Friday\n\n<!-- tiro:begin job=moved id=(\S+) -->\n(.*)\n"
+                      r"<!-- tiro:end id=\1 -->\n- \[ \] Call the dentist", day)
+    assert trace and trace.group(2) == ("- ↗ moved to [[JupyterHub next]]: "
+                                        "Fix the kernel spawner #jupyterhub")
+    assert "unasked, by #jupyterhub" in _block(vault)
+    # Its own commit, marked unasked, and first in the journal.
+    [entry] = [e for e in record.entries if e.verb == "tasks"]
+    assert entry.trigger == "auto" and entry.moves == [(first.text, DAY, HUB)]
+    log = git("log", "-1", "--format=%B", entry.commit)
+    assert "Tiro-Trigger: auto" in log and "Tiro-Job: tasks" in log
+    journal = (vault / "Tiro" / "Journal" / f"{record.run_id[:10]}.md").read_text()
+    unasked = journal.split("### Done unasked")[1].split("### The rest")[0]
+    assert "[[2026-10-17]] → [[Projects/JupyterHub next]]" in unasked
+
+
+def test_sure_is_not_enough_outside_an_l4_folder(ready, vault) -> None:
+    _hub_uses_the_tag(vault)
+    hub = (vault / HUB).read_bytes()
+    _triage(ready, _sure({"tag": "jupyterhub"}))
+    assert (vault / HUB).read_bytes() == hub
+    body = _block(vault)
+    assert "- [ ] Move to [[JupyterHub next]]: Fix" in body
+    assert "Not moved unasked" in body and "L4" in body
+
+
+@pytest.mark.parametrize("basis, n, ok", [
+    ({"tag": "jupyterhub"}, 1, True),
+    ({"tag": "jupyterhub"}, 3, False),          # the task does not carry it
+    ({"tag": "teaching"}, 1, False),            # nor does the hub use it
+    ({"named": "JupyterHub"}, 1, False),        # the task does not say it
+    ({"link": "JupyterHub next"}, 1, False),    # the task does not link it
+    ({"rule": "R-999"}, 1, False),              # no such rule
+    ({}, 1, False),
+])
+def test_the_runner_checks_the_basis_itself(open_root, vault, basis, n, ok) -> None:
+    _hub_uses_the_tag(vault)
+    task = [t for t in tasks.tasks(DAILY) if t.open and not t.problem][n - 1]
+    from tiro.links import Index
+
+    problem = tasks.sure_problem(open_root, {}, DAY, task, HUB, basis, Index(vault))
+    assert (problem is None) is ok, problem
+
+
+def test_a_task_that_names_or_links_its_note_is_sure(open_root, vault) -> None:
+    from tiro.links import Index
+
+    text = "- [ ] Ask about the JupyterHub quota\n- [ ] See [[JupyterHub next]] for it\n"
+    named, linked = tasks.tasks(text)
+    index = Index(vault)
+    assert tasks.sure_problem(open_root, {}, DAY, named, HUB, {"named": "JupyterHub"}, index) is None
+    assert tasks.sure_problem(open_root, {}, DAY, linked, HUB, {"link": True}, index) is None
+
+
+def test_an_undone_unasked_move_is_never_made_unasked_again(open_root, vault) -> None:
+    _hub_uses_the_tag(vault)
+    hub = (vault / HUB).read_bytes()
+    record = _triage(open_root, _sure({"tag": "jupyterhub"}))
+    assert (vault / HUB).read_bytes() != hub
+
+    cli.main(["--root", str(open_root.root), "--vault", str(vault), "undo", record.run_id])
+    assert (vault / HUB).read_bytes() == hub
+    _age(vault)
+
+    _triage(open_root, _sure({"tag": "jupyterhub"}))
+    assert (vault / HUB).read_bytes() == hub
+    body = _block(vault)
+    assert "- [ ] Move to [[JupyterHub next]]: Fix" in body
+    assert "you undid this move before" in body
+
+
+def test_a_ticked_move_leaves_a_link_where_the_task_was(ready, vault) -> None:
+    _triage(ready)
+    _tick(vault, "Write the upgrade note")
+    _carry(ready)
+    day = (vault / DAY).read_text()
+    assert re.search(r"- \[x\] Merge the docs PR ✅ 2026-09-30\n<!-- tiro:begin job=moved [^\n]+\n"
+                     r"- ↗ moved to \[\[JupyterHub next\]\]: Write the upgrade note\n", day)
+    assert [t.text for t in tasks.tasks(day) if t.open] == [
+        "Fix the kernel spawner #jupyterhub", "Call the dentist"]

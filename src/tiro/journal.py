@@ -93,12 +93,12 @@ def write_journal(config: Config, record: RunRecord) -> Path:
         lines += ["### Done unasked", ""]
         for entry in unasked:
             lines.append(_entry_line(entry, link=entry.moved_to or entry.note))
+            lines += _move_lines(entry)
         lines += ["", "### The rest", "" ]
     for entry in record.entries:
         if entry.trigger != "auto":
             lines.append(_entry_line(entry, link=entry.note))
-            for words, src, dst in entry.moves:
-                lines.append(f"    - {words}: [[{_link(src)}]] → [[{_link(dst)}]]")
+            lines += _move_lines(entry)
     for skip in record.skipped:
         lines.append(f"- · skipped [[{_link(skip['rel'])}]] — {skip['why']}")
     for note in record.notes:
@@ -160,6 +160,11 @@ def spend(usage: Usage) -> str:
         tokens += f" ({usage.cache_read_tokens:,} from cache)"
     cost = f"${usage.cost_usd:.2f}" if usage.cost_usd is not None else "cost not reported"
     return f"{tokens}, {cost}."
+
+
+def _move_lines(entry: Entry) -> list[str]:
+    return [f"    - {words}: [[{_link(src)}]] → [[{_link(dst)}]]"
+            for words, src, dst in entry.moves]
 
 
 def _entry_line(entry: Entry, *, link: str) -> str:

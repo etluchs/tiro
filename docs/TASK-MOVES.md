@@ -12,16 +12,22 @@ answer, as built. Before this: [ITERATION-3](ITERATION-3.md).
 
 ## The shape, in one paragraph
 
-Triage proposes and the user ticks. Then the runner moves the task, and the
-model has no part in that step. For every open task in a note, triage names an
+Triage proposes and the user ticks, unless Tiro is sure. Then the runner
+moves the task, and the model has no part in that step. For every open task in a note, triage names an
 existing note it belongs in, or says that it stays. The runner checks each
 destination and writes a `tasks` block on the note, with one checkbox per
 move. Ticking a box accepts that move and no other. On the next run, the
 runner moves each ticked task byte for byte. It goes from the source note to
 just after the last task of the destination's first task list. A check that
 does not depend on how the move was made then confirms that nothing else
-changed on either side. The batch is one commit, so `tiro undo` or a
-`git revert` puts both notes back exactly.
+changed on either side. A link to the destination stays where the task was.
+The batch is one commit, so `tiro undo` or a `git revert` puts both notes
+back exactly.
+
+**When Tiro is sure, it moves right away** (added 2026-10-18, at the user's
+request). Triage may say it is sure of a destination and give a basis the
+runner can check. If the runner confirms it, and the note the task leaves is
+in an L4 folder, the move is made in the same run, with no tick.
 
 ## The open questions, answered
 
@@ -60,16 +66,42 @@ The proposal-only alternative (Tiro copies the line, the user deletes the
 original) was not chosen. It leaves the same task in two places until the user
 gets round to the second half, which is the half-done state never #4 is about.
 
-### 2. Moves without a tick: not now
+### 2. Moves without a tick: yes, when Tiro is sure on a checkable basis
 
-Out of scope, as the spec's non-goals say. The tick is the accept. A move
-nobody ticked should wait until accepted moves have been in use for a while.
-Then the corrections data can show whether the proposals are good enough. When
-it does, the place to start is the same as auto mode's: a basis the runner can
-check, such as a `#context` tag that names a folder, or a destination triage
-named twice with no correction in between. A tick could then become the
-exception rather than the rule. The model saying it is sure will never be
-enough on its own.
+The first build left this out, as the spec's non-goals did. The user then
+asked for it: "when Tiro is reasonably sure it should move right away, and
+leave a link to the destination". It follows auto mode's pattern. The model
+saying it is sure is needed and never enough; the runner confirms the basis
+itself, and the consent is given per folder in advance.
+
+The model gives `"sure": true` and one basis. The runner checks it against
+the task and the destination as they are:
+
+| Basis | What the runner checks |
+|---|---|
+| `{"tag": "jupyterhub"}` | the task carries `#jupyterhub`, and the destination uses it already, in its text or its frontmatter `tags` |
+| `{"link": true}` | a link in the task resolves to the destination |
+| `{"named": "JupyterHub"}` | the task's words (not its tags) say the name, and the destination's filename or an alias contains it; at least four characters |
+| `{"rule": "R-012"}` | the rule exists in `.tiro/rules.md` |
+
+On top of the basis:
+
+- **The note the task leaves is in an L4 folder.** L4 is the level a user
+  raises a folder to when Tiro may move things out of it unasked, for notes
+  (auto mode) and now for tasks. Below L4, a sure move is a proposal, and the
+  line under it says why.
+- **Every check a ticked move gets**, at the moment it is made: the
+  destination exists, is L3, is not a daily note or closed, has not changed,
+  and the task is still exactly as written.
+- **Never against the user.** `tiro undo` on an unasked move records that
+  task and destination in `state.json` (`tasks.declined`). That move is then
+  only ever proposed, never made unasked again.
+
+A sure move is written into the block ticked by Tiro and made right after the
+triage that proposed it, in the same run, as its own commit. The triage and
+the move can then be undone apart. The commit carries `Tiro-Trigger: auto`,
+and the journal lists it under **Done unasked**. The **Moved** record says
+"unasked" and gives the basis.
 
 ### 3. Placement: after the first task list, as in criterion 5
 
@@ -118,8 +150,28 @@ source cannot be is a destination type: tasks never move *into* a daily note,
 - The link is the user's to edit. Naming another note there turns the line
   into a new proposal for that note. That proposal is checked like any other
   and needs a tick of its own.
+- A move Tiro was sure of and made carries `auto=<basis>` in its comment
+  until it is made, and "— unasked, by #jupyterhub" in its record after.
 - The block is its own, not part of triage's. A later triage replaces the
   proposals but keeps the **Moved** record and any move still ticked.
+
+## What stays where the task was
+
+A link to where it went, as a small block of Tiro's, in the task's place:
+
+```markdown
+- [ ] Call the dentist
+<!-- tiro:begin job=moved id=3fa2c1-moved-9c1b7d4e -->
+- ↗ moved to [[JupyterHub next]]: Fix the kernel spawner #jupyterhub
+<!-- tiro:end id=3fa2c1-moved-9c1b7d4e -->
+```
+
+It is a block so that it is Tiro's text and not the user's. The check that the
+source lost only the moved lines still holds, the user hash ignores it, and
+the user may delete it freely. Tiro does not log that as a correction. It is
+not a checkbox, so the Tasks plugin does not count it. The comment lines split
+the list in two in reading view, which shows as a small gap. That is the cost
+of the link being exactly where the task was.
 
 ## What the runner checks, and when
 
@@ -220,6 +272,10 @@ All in `tests/test_tasks.py`.
 | 10 | one commit; reverting it restores both | `test_a_batch_is_one_commit_and_reverting_it_restores_both_notes`, `test_undo_takes_the_move_back_and_unticks_it` |
 | 11 | the journal lists every move | `test_the_journal_lists_every_move_with_source_and_destination` |
 | 12 | no fitting destination: stays, and is named | `test_triage_proposes_a_destination_or_a_reason_for_every_open_task`, `test_a_destination_that_fails_a_check_is_never_proposed` |
+| — | sure: moved in the same run, a link left behind, listed as unasked | `test_a_sure_move_is_made_in_the_same_run_and_leaves_a_link` |
+| — | sure is not enough without L4, or with a basis that does not hold | `test_sure_is_not_enough_outside_an_l4_folder`, `test_the_runner_checks_the_basis_itself`, `test_a_task_that_names_or_links_its_note_is_sure` |
+| — | an undone unasked move is never made unasked again | `test_an_undone_unasked_move_is_never_made_unasked_again` |
+| — | a ticked move leaves a link too | `test_a_ticked_move_leaves_a_link_where_the_task_was` |
 
 ## What is left for the user
 
@@ -229,6 +285,11 @@ All in `tests/test_tasks.py`.
 2. Make sure the folders tasks should land in are **L3** in
    `.tiro/trust.toml`. A folder below L3 gets no proposals, only a line saying
    why.
-3. Let auto mode triage a few daily notes, tick some moves, and look at
+3. For moves without a tick, raise the folder the daily notes live in to
+   **L4** (`"/"` or `"journal/"`). That also lets auto mode file notes out of
+   it, and daily notes are never filed, so for a daily-notes folder L4 means
+   exactly "move tasks out unasked". Leave it below L4 and every move waits
+   for a tick.
+4. Let auto mode triage a few daily notes, tick some moves, and look at
    [[JupyterHub next]] afterwards. None of this has run against the real vault
    yet.

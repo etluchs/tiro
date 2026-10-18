@@ -4,7 +4,7 @@ Tasks get written down wherever the user happens to be, usually the day's
 daily note, and stay there. Triage can tell where one belongs; this module is
 how it gets there without the user copying lines by hand.
 
-Three steps, and only the second is the user's:
+Three steps, and the second is the user's unless Tiro is sure:
 
 1. **Triage proposes.** For every open task in the note it names an existing
    note, or says the task stays and why. The runner checks each destination
@@ -20,6 +20,16 @@ Three steps, and only the second is the user's:
    exactly those lines and the destination gained exactly those lines, and
    nothing else changed on either side. That is the exception to never #3:
    whole task lines, verbatim, after an explicit accept, by the runner.
+
+**Sure means checkable.** Triage may say it is sure of a destination and give
+a basis: the task links to the note, carries a tag the note uses, names the
+note, or a rule in ``rules.md`` covers it. When the runner confirms the basis
+itself, and the note the task leaves is in an L4 folder, the move is made in
+the same run with no tick: the L4 is the accept, given in advance, as for auto
+mode's filing. Anything short of that is a proposal.
+
+Wherever a task left, a small block of Tiro's stays in its place, linking to
+where it went.
 
 Everything here is text in, text out. The writes, the gate and the commit are
 the runner's (``runner.move_tasks``).
@@ -37,6 +47,7 @@ from urllib.parse import quote, unquote
 
 from tiro import gate, protocol
 from tiro.config import Config, as_vault_path, in_folder
+from tiro.links import _aliases, iter_links
 from tiro.scan import OURS, Skipped, is_daily, iter_notes
 
 #: The job and block name. Not a verb: the user never writes it.
@@ -48,8 +59,15 @@ FROM_TRUST = "L2"
 #: Putting a line into another note is putting something somewhere, which is
 #: what L3 opens up, as it does for filing a note into a folder.
 TO_TRUST = gate.MOVE_TO_TRUST
+#: Moving a task with no tick: the folder it leaves must be L4, the level a
+#: user raises a folder to when Tiro may move things out of it unasked.
+SURE_FROM_TRUST = "L4"
+#: The shortest name a "the task names the note" basis may go by.
+NAME_AT_LEAST = 4
 #: How many of its own landings Tiro remembers per destination.
 LANDINGS_KEPT = 50
+#: The small block left where a task was, linking to where it went.
+TRACE = "moved"
 
 # Any checkbox item, with what precedes it: a quote or callout prefix, an
 # indent, and the marker. Group 3 is the status character.
@@ -289,6 +307,8 @@ class Move:
     note: str = ""  # one line under it: why it did not move last time
     #: the target of the link the line shows, which the user may have edited.
     named: str = ""
+    #: the checked basis, when Tiro ticked this itself because it was sure.
+    auto: str = ""
 
 
 @dataclass
@@ -325,7 +345,8 @@ def read_board(text: str) -> Board | None:
             board.moves.append(Move(
                 task=attrs.get("task", ""), to=unquote(attrs.get("to", "")),
                 hash=attrs.get("hash", ""), text=_after_link(m.group(2)),
-                ticked=m.group(1) in "xX", named=visible_target(m.group(2))))
+                ticked=m.group(1) in "xX", named=visible_target(m.group(2)),
+                auto=unquote(attrs.get("auto", ""))))
             section = "moves"
             continue
         if section == "moves" and line.startswith("  ") and board.moves:
@@ -350,6 +371,8 @@ def visible_target(line_text: str) -> str:
 def move_line(move: Move, index) -> list[str]:
     box = "x" if move.ticked else " "
     meta = f"task={move.task} to={quote(move.to)} hash={move.hash}"
+    if move.auto:
+        meta += f" auto={quote(move.auto)}"
     out = [f"- [{box}] Move to {link(index, move.to)}: {move.text} <!-- tiro:move {meta} -->"]
     if move.note:
         out.append(f"  *{move.note}*")
@@ -388,6 +411,7 @@ def untick(text: str, why: str, index, today: str) -> str | None:
     for move in board.moves:
         if move.ticked:
             move.ticked = False
+            move.auto = ""
             move.note = why
     return protocol.upsert_block(text, job=JOB, id=block.id,
                                  body=render(board, index, today))
@@ -398,7 +422,7 @@ def _count(n: int) -> str:
 
 
 def propose(config: Config, rel: str, text: str, answers: list[dict], *,
-            today: str, index) -> str | None:
+            today: str, index, state: dict | None = None) -> str | None:
     """The tasks block a triage of ``rel`` leaves, or None to leave none.
 
     Every open task gets a line: a move to an existing note that passes every
@@ -406,6 +430,9 @@ def propose(config: Config, rel: str, text: str, answers: list[dict], *,
     runner gave each task; the runner, not the model, decides what reaches the
     block. A move already ticked and not yet made is kept, and so is the record
     of what moved before.
+
+    A move triage is sure of, on a basis the runner confirms, is written
+    ticked: the runner makes it in the same run (``sure_problem``).
     """
     found = [t for t in tasks(text) if t.open]
     old = read_board(text)
@@ -441,24 +468,134 @@ def propose(config: Config, rel: str, text: str, answers: list[dict], *,
             board.stays.append(f"{task.text} — not to `{to}`: {problem}")
             continue
         dest = (config.vault / to).read_text(encoding="utf-8")
-        board.moves.append(Move(task.key, to, protocol.user_hash(dest), task.text))
+        move = Move(task.key, to, protocol.user_hash(dest), task.text)
+        if answer.get("sure") is True:
+            basis = answer.get("basis") if isinstance(answer.get("basis"), dict) else {}
+            why_not = sure_problem(config, state or {}, rel, task, to, basis, index)
+            if why_not is None:
+                move.ticked, move.auto = True, sure_text(basis)
+            else:
+                move.note = f"Not moved unasked: {why_not}."
+        board.moves.append(move)
     for task in found:
         if task.problem:
             board.stays.append(f"{task.text} — {task.problem}")
     return render(board, index, today)
 
 
+def sure_problem(config: Config, state: dict, source: str, task: Task, to: str,
+                 basis: dict, index) -> str | None:
+    """Why Tiro may not move this task without a tick, or None if it may.
+
+    The model's "sure" is needed and never enough: the runner confirms the
+    basis itself, from the task and the destination as they are.
+    """
+    if not config.trust.permits(source, SURE_FROM_TRUST):
+        return (f"this note's folder is {config.trust.level_for(source)}, and Tiro "
+                f"moves tasks unasked only out of {SURE_FROM_TRUST} folders")
+    if [task.key, to] in state.get("tasks", {}).get("declined", []):
+        return "you undid this move before"
+    body = "\n".join(task.lines)
+    dest = (config.vault / to).read_text(encoding="utf-8")
+    if basis.get("link"):
+        if any(index.resolve(l.target, from_rel=source) == to for l in iter_links(body)):
+            return None
+        return "the task does not link to that note"
+    if basis.get("tag"):
+        tag = "#" + str(basis["tag"]).strip().lstrip("#")
+        if not _has_tag(body, tag):
+            return f"the task does not carry {tag}"
+        if not (_has_tag(_prose_only(dest), tag) or tag[1:].lower() in _fm_tags(dest)):
+            return f"that note does not use {tag}"
+        return None
+    if basis.get("named"):
+        name = " ".join(str(basis["named"]).split())
+        if len(name) < NAME_AT_LEAST:
+            return f"“{name}” is too short a name to go by"
+        # Words, not tags: a tag is a basis of its own, checked against the
+        # destination's use of it.
+        if not _has_words(re.sub(r"#[^\s#]+", " ", task.text), name):
+            return f"the task does not say “{name}”"
+        if not any(_has_words(title, name) for title in (Path(to).stem, *_aliases(dest))):
+            return f"that note is not called “{name}”"
+        return None
+    if basis.get("rule"):
+        rule = str(basis["rule"]).strip()
+        rules = config.tiro_dir / "rules.md"
+        if re.fullmatch(r"R-\d+", rule) and rules.exists() and re.search(
+                rf"(?<![\w-]){re.escape(rule)}(?!\d)", rules.read_text(encoding="utf-8")):
+            return None
+        return f"there is no rule {rule} in rules.md"
+    return "triage gave no basis Tiro can check"
+
+
+def sure_text(basis: dict) -> str:
+    """The basis of an unasked move, as the note says it."""
+    if basis.get("link"):
+        return "the task links to it"
+    if basis.get("tag"):
+        return "by #" + str(basis["tag"]).strip().lstrip("#")
+    if basis.get("named"):
+        return "the task names it"
+    return f"by {str(basis.get('rule', '')).strip()}"
+
+
+def _has_tag(text: str, tag: str) -> bool:
+    return bool(re.search(rf"(?<![\w/#]){re.escape(tag)}(?![\w/-])", text, re.I))
+
+
+def _has_words(text: str, words: str) -> bool:
+    return bool(re.search(rf"(?<!\w){re.escape(words)}(?!\w)", text, re.I))
+
+
+def _fm_tags(text: str) -> set[str]:
+    """The note's frontmatter tags, lower case, without the ``#``."""
+    fm, _, present = protocol.split_frontmatter(text)
+    out: set[str] = set()
+    collecting = False
+    for line in fm if present else []:
+        if re.match(r"^tags?\s*:", line):
+            value = line.split(":", 1)[1].strip()
+            collecting = not value
+            out |= {v.strip(" \"'#").lower() for v in re.split(r"[,\s]+", value.strip("[]")) if v.strip()}
+            continue
+        if collecting and line.startswith((" ", "\t", "-")):
+            out.add(line.lstrip(" \t-").strip(" \"'#").lower())
+            continue
+        collecting = False
+    return out - {""}
+
+
+def declined(state: dict, task: str, to: str) -> None:
+    """The user undid an unasked move: never make that one unasked again."""
+    pairs = state.setdefault("tasks", {}).setdefault("declined", [])
+    if [task, to] not in pairs:
+        pairs.append([task, to])
+
+
 # -- moving -----------------------------------------------------------------
 
 
-def remove(text: str, chunks: list[Task]) -> str:
-    """The note without these tasks: their lines, and nothing else."""
+def remove(text: str, chunks: list[Task], trace=None) -> str:
+    """The note without these tasks: their lines, and nothing else of the
+    user's. ``trace``, if given, makes the lines of a Tiro block to leave in
+    each task's place (``trace_block``)."""
     lines = text.split("\n")
     for task in sorted(chunks, key=lambda t: t.start, reverse=True):
         if tuple(lines[task.start:task.end]) != task.lines:
             raise ValueError(f"the task at line {task.start + 1} is not where it was read")
-        del lines[task.start:task.end]
+        lines[task.start:task.end] = trace(task) if trace else []
     return "\n".join(lines)
+
+
+def trace_block(note_id: str, task: Task, where: str) -> list[str]:
+    """What stays where a task was: a block of Tiro's, so not the user's prose,
+    with one line saying where the task went. Not a checkbox: the plugin
+    must not count it as a task."""
+    bid = f"{note_id}-{TRACE}-{task.key[:8]}"
+    return [f"<!-- tiro:begin job={TRACE} id={bid} -->",
+            f"- ↗ moved to {where}: {task.text}",
+            f"<!-- tiro:end id={bid} -->"]
 
 
 def insert(text: str, chunk: list[str]) -> str:

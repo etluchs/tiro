@@ -60,6 +60,21 @@ You only name. The runner checks each destination, writes the proposals as a
 checkbox per move, and moves nothing until the user ticks one. It moves the
 task exactly as written, so do not suggest rewording.
 
+**When you are sure**, say `"sure": true` and give a basis the runner can
+check, and it moves the task right away, with no tick:
+
+- `{"tag": "jupyterhub"}`: the task carries the tag, and the destination
+  already uses it;
+- `{"link": true}`: the task links to the destination;
+- `{"named": "JupyterHub"}`: the task's words say the destination's name or
+  an alias (tags do not count here);
+- `{"rule": "R-012"}`: a rule in `rules.md` says where such tasks go.
+
+The runner confirms the basis itself; one that does not hold makes the move a
+proposal. Sure means one destination and no other is plausible. A task that
+could go two ways, or that you placed by its gist alone, is a proposal: it
+costs the user one tick.
+
 ## Obvious, and why
 
 Say `"obvious": true` only when the destination is clearly right: a rule in
@@ -111,7 +126,8 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
   "obvious": false,
   "basis": {"rule": "R-014"},
   "tasks": [
-    {"n": 1, "to": "Projects/JupyterHub next.md", "why": "the hub upgrade backlog"},
+    {"n": 1, "to": "Projects/JupyterHub next.md", "why": "the hub upgrade backlog",
+     "sure": true, "basis": {"tag": "jupyterhub"}},
     {"n": 2, "to": "", "why": "a personal errand; no note holds those"}
   ],
   "detail": "one line for the journal, under 120 characters"
@@ -124,7 +140,8 @@ End your reply with exactly one fenced `json` block. Nothing after it is read.
   above applies.
 - `tasks` has one entry per open task the job listed, by its number. `to` is
   a vault-relative path to an existing note, or empty for a task that stays.
-  `why` is a few words. Leave `tasks` out when the job lists none.
+  `why` is a few words. `sure` and `basis` are optional, as above. Leave
+  `tasks` out when the job lists none.
 - `needs-input` means you asked a question and are waiting. Prefer it to guessing.
 - `blocked` means you could not do the job. Say why in `detail`.
 
