@@ -32,6 +32,12 @@ the folders you open up, works out what it is and what it relates to, and files
 it when that is obvious. Where it is unsure, it proposes or asks in the note.
 Everything it did unasked is listed at the top of the day's journal.
 
+Tasks written in the day's note get a home. Triage proposes, for each open
+task, the note it belongs in; tick the move and Tiro carries the line over,
+exactly as written, onto that note's task list. Where it is sure, by a tag, a
+link or a name it can check, it moves the task right away, and leaves a link
+to it behind.
+
 Or ask. `tiro chat` opens a conversation with Tiro over the vault: "what did
 you do last night?", "what is waiting on me?", "research this note now". It
 reads freely and acts only through `tiro` commands you approve, so a request
@@ -57,4 +63,5 @@ vault, in `.tiro/`, where Tiro may propose changes but never make them.
   how we know it works
 - **[Iteration 2](docs/ITERATION-2.md)**: rules that learn from corrections
 - **[Iteration 3](docs/ITERATION-3.md)**: auto mode, notes looked after without a tag
+- **[Task moves](docs/TASK-MOVES.md)**: open tasks moved to the note they belong in, once ticked
 - **[Prior art](docs/PRIOR-ART.md)** — what the neighbours built and what we took

@@ -87,6 +87,40 @@ the source's level and the folder rule again afterwards, as a fact.
 Without the tag, "L2 for itself" does not apply: an auto job may write its
 block only where the folder is L2 or higher.
 
+## A task move is two notes and one commit
+
+Never #3 has one exception, and it belongs to the runner, not the agent. When
+the user ticks a task move that triage proposed, the runner moves that whole
+task (its line, its sub-items, its indented continuation) from one note to
+another, byte for byte. It is a mechanical operation, and code checks it:
+
+- **Proposing** needs nothing beyond triage's own block. The destination must
+  be a note that **exists**, at **L3**: putting a line into a note is putting
+  something somewhere. It must not be a daily note, one of Tiro's own, or in a
+  folder in `[tasks] never_into`. Each of these is checked again at the tick.
+- **The tick is the accept.** The source need only be a note Tiro may write:
+  L2 for itself if tagged, by its folder if not. This is the same reasoning as
+  `tiro: file`.
+- **Without a tick, L4.** Triage may be sure, with a basis: a tag the
+  destination uses, a link to it, its name in the task's words, or a rule.
+  The runner confirms the basis itself. Even then it moves the task unasked
+  only out of an **L4** folder, the accept given in advance, as for auto
+  mode. A move the user undid is never made unasked again.
+- **Nothing stale moves.** The task must still be exactly as proposed, and the
+  destination's user hash must match the one recorded at the proposal, or
+  differ from it only by Tiro's own landings. Otherwise the move is not made,
+  and the block says so.
+- **Afterwards, as a fact.** The gate's rules, with the destination judged at
+  L3. Then `tasks.check` compares both notes before and after: the source's
+  prose lost exactly the moved lines, each destination gained exactly those
+  lines, and nothing else changed. The link left in the task's place is a
+  block of Tiro's, so it is not prose. A failure undoes the move from Tiro's own
+  record and unticks it, with the reason under each line.
+
+The batch is one commit, with both notes declared. Before Tiro writes either
+note, any changes the user had not committed are committed first, as for any
+job, so reverting the batch restores both notes exactly.
+
 ## The gate
 
 Before any commit, every one of these must hold, or the job's changes are rolled
@@ -96,7 +130,7 @@ back and the note is marked `blocked`:
 2. No file outside the job's declared paths changed.
 3. No file deleted.
 4. No file moved or renamed, unless the job is `file` and the trust levels above
-   permit that particular move.
+   permit that particular move. (A task move moves lines, not files.)
 5. Every wikilink that resolved before the job still resolves.
 6. The note's mtime is unchanged since the job read it.
 

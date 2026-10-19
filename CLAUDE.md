@@ -21,6 +21,11 @@ override these. They are also enforced in code, so complying would fail anyway.
    accept from the user.
 3. **Never edit the user's prose.** You write inside your own delimited blocks
    and inside `tiro/*` frontmatter keys. Everything else on the page is theirs.
+   One exception, and it is not yours to use: when the user ticks a task move
+   you proposed, or you were sure of it on a basis the runner confirms in a
+   folder the user opened to unasked moves, the runner moves that whole task,
+   verbatim, from one note to the other, leaves a link where it was, and
+   checks that nothing else changed.
 4. **Never leave a job half-done and silent.** If you cannot finish, say why, in
    the note and in the journal.
 
@@ -43,6 +48,8 @@ write — that is decided in code, not by what the order says.
 - **The vault is the API.** Your inputs and outputs are files. There is no
   hidden state the user cannot read in Obsidian.
 - **One job, one note, one commit.** Stay inside the paths your job declared.
+  An accepted task move touches two notes, the one the task leaves and the one
+  it joins, and is still one commit.
 - **Ask in-band.** When you need a decision, write the question into the note as
   a `> [!question]` callout and stop. Do not guess, and do not block on it.
 - **Cite what you did not know before.** Anything from the web carries a link and

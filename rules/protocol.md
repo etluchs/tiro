@@ -94,6 +94,30 @@ tagged run first, and auto jobs take at most `[auto] max_per_run` of what is
 left. An auto job's commit is `tiro(auto): <note>` with `Tiro-Trigger: auto`,
 and the journal lists it under **Done unasked**.
 
+## Task moves: the third trigger
+
+When `triage` looks at a note with open tasks (`- [ ]`), the runner writes a
+block of its own, `tasks`, next to triage's. It holds one line per open task:
+either a checkbox proposing a move to an existing note, or the reason the task
+stays. Full design: `docs/TASK-MOVES.md`.
+
+```markdown
+- [ ] Move to [[JupyterHub next]]: Fix the kernel spawner <!-- tiro:move task=… to=… hash=… -->
+```
+
+**The tick is the accept**, one move at a time. A move triage is sure of, on
+a basis the runner confirms, out of an L4 folder, is ticked by Tiro instead
+and made in the same run (`Tiro-Trigger: auto`, under *Done unasked*). A note with a ticked move is
+acted on whatever its hash says, because the tick is inside Tiro's block and
+so outside the user hash. The runner makes the move with no model. Every
+ticked move is then made, or unticked with the reason written under it, so the
+trigger fires once. A ticked move runs before any job in the same run.
+
+Where a task left, a `moved` block takes its place, one line linking to where
+it went. The move writes the task into the destination and nothing else: not
+a block, not a key. Tiro remembers its own landings in `state.json` (`tasks.landed`),
+and a note that changed only by them is not taken for one the user edited.
+
 ## Blocks
 
 Write only between your markers. They are HTML comments: invisible in reading
@@ -110,6 +134,9 @@ view, greppable, stable.
 ```
 
 One block per job per note, keyed by `id`, which is `<tiro/id>-<job>`.
+`tasks` and `moved` are the blocks no verb names: triage's proposals for the
+note's open tasks, and the link left where a task was moved from. Both are the
+runner's.
 Re-running a job replaces its block in place: no duplicates, clean diffs, and
 one job never overwrites another's. A block from before per-job ids is keyed
 by the note's id alone, and its own job keeps replacing it there.
